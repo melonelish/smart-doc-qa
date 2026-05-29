@@ -11,6 +11,7 @@ langchain-text-splitters>=0.3.0
 langchain-core>=0.3.0
 langchain-community>=0.3.0
 faiss-cpu>=1.9.0
+numpy>=1.26.0,<2.0.0  # 锁定 numpy 1.x，2.x 与 pandas/sklearn ABI 不兼容
 pypdf>=4.0.0
 python-docx>=1.0.0
 scikit-learn>=1.5.0
