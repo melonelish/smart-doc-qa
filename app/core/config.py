@@ -17,8 +17,10 @@ class Settings(BaseSettings):
     openai_model: str = "deepseek-v4-pro"
     openai_embedding_model: str = "local"
     local_embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    reranker_model: str = "BAAI/bge-reranker-base"
     openai_timeout: int = 60
     openai_proxy: str = ""
+    conversation_ttl_seconds: int = 3600
 
     mysql_host: str = "localhost"
     mysql_port: int = 3306
@@ -30,6 +32,7 @@ class Settings(BaseSettings):
     redis_port: int = 6379
 
     vector_store_path: str = str(_PROJECT_ROOT / "data" / "vector_store")
+    hf_endpoint: str = ""
     allowed_extensions: str = ".pdf,.txt,.md,.docx,.csv"
     max_file_size_mb: int = 10
     chunk_size: int = 1000
