@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartDocQA - 智能文档问答助手</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
+</head>
+<body>
+  <div id="toast-container" class="toast-container"></div>
+
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <div class="logo-icon">📄</div>
+          <div class="logo-text">
+            <h2>SmartDocQA</h2>
+            <span>Intelligent Document Q&A</span>
+          </div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-view="chat">
+          <span class="nav-icon">💬</span> AI 智能问答
+        </button>
+        <button class="nav-item" data-view="documents">
+          <span class="nav-icon">📁</span> 文档管理
+        </button>
+        <button class="nav-item" data-view="upload">
+          <span class="nav-icon">📤</span> 上传文档
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="status-dot"></span>
+        <span>LangChain + FAISS + FastAPI</span>
+      </div>
+    </aside>
+
+    <!-- Main Panel -->
+    <main class="main-panel">
+      <!-- Top Bar -->
+      <header class="top-bar">
+        <h1 id="page-title">💬 AI 智能问答</h1>
+        <div class="top-bar-right">
+          <span id="doc-count-badge" class="badge badge-primary">0 个文档</span>
+          <span class="badge badge-success">RAG v1.0</span>
+        </div>
+      </header>
+
+      <!-- Content Area -->
+      <div class="content-area">
+        <!-- Left Column -->
+        <div class="column-left" id="column-left">
+          <!-- Upload Card -->
+          <div class="card" id="upload-card">
+            <div class="card-header">
+              <span class="card-title"><span class="icon">📤</span> 上传文档</span>
+              <span class="card-badge">PDF / TXT / CSV / MD</span>
+            </div>
+            <div class="upload-zone" id="upload-zone">
+              <div class="upload-icon">☁️</div>
+              <div class="upload-text">拖拽文件到此处或点击上传</div>
+              <div class="upload-hint">支持 PDF、TXT、Markdown、CSV · 最大 10MB</div>
+              <input type="file" id="file-input" accept=".pdf,.txt,.md,.csv">
+            </div>
+            <div class="upload-progress" id="upload-progress">
+              <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                <span id="upload-filename" style="font-size:12px;color:var(--text-secondary);"></span>
+                <span id="upload-percent" style="font-size:12px;color:var(--accent-light);">0%</span>
+              </div>
+              <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Document List Card -->
+          <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+            <div class="card-header">
+              <span class="card-title"><span class="icon">📋</span> 我的文档</span>
+              <button class="btn btn-secondary btn-sm" onclick="refreshDocs()">🔄 刷新</button>
+            </div>
+            <div class="doc-list" id="doc-list">
+              <div class="empty-state">
+                <div class="empty-icon">📭</div>
+                <p>暂无文档，请上传你的第一个文档</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column - Chat Area -->
+        <div class="column-right" id="column-right">
+          <div class="chat-container" id="chat-container">
+            <div class="chat-header">
+              <div class="chat-header-info">
+                <h3 id="chat-doc-name">选择文档开始对话</h3>
+                <p id="chat-doc-status">请先在左侧选择一个已处理的文档</p>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="clearChat()">🗑️ 清空对话</button>
+            </div>
+            <div class="chat-messages" id="chat-messages">
+              <div class="chat-empty">
+                <div class="empty-icon">🤖</div>
+                <h3>开始智能文档问答</h3>
+                <p>上传文档并点击「处理」后，AI 将深入理解你的文档内容。你可以像和人类专家对话一样，对文档提出任何问题。</p>
+              </div>
+            </div>
+            <div class="chat-input-area">
+              <textarea
+                id="chat-input"
+                placeholder="输入你的问题，AI 将从文档中智能检索答案..."
+                rows="1"
+                onkeydown="handleChatKeydown(event)"
+                disabled
+              ></textarea>
+              <button class="btn-send" id="btn-send" onclick="sendMessage()" disabled>➤</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
