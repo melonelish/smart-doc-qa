@@ -3,8 +3,15 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.database import get_db
+from app.exceptions import (
+    DocumentNotFoundError,
+    FileTypeNotAllowedError,
+    FileTooLargeError,
+    ProcessingError,
+)
 from app.models.document import DocumentStatus
 from app.services.document_service import DocumentService
+from app.services.progress_ws import progress_tracker
 from app.services.qa_service import QAService, load_and_split_document
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
@@ -21,16 +28,12 @@ async def upload_document(
 
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
     if f".{ext}" not in settings.allowed_file_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的文件类型，允许的类型: {settings.allowed_extensions}",
-        )
+        raise FileTypeNotAllowedError(ext, settings.allowed_extensions)
 
     content = await file.read()
     if len(content) > settings.max_file_size_mb * 1024 * 1024:
-        raise HTTPException(
-            status_code=400,
-            detail=f"文件大小超过限制 ({settings.max_file_size_mb}MB)",
+        raise FileTooLargeError(
+            len(content) / (1024 * 1024), settings.max_file_size_mb
         )
 
     await file.seek(0)
@@ -57,7 +60,7 @@ async def process_document(
 ):
     doc = DocumentService.get_document(db, doc_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="文档不存在")
+        raise DocumentNotFoundError(doc_id)
 
     if doc.status == DocumentStatus.READY:
         return {"message": "文档已处理", "status": doc.status.value}
@@ -65,9 +68,14 @@ async def process_document(
     DocumentService.update_document_status(db, doc, DocumentStatus.PROCESSING)
 
     try:
-        qa = QAService()
+        progress_tracker.set(doc_id, "正在加载文档...", 10)
         chunks = load_and_split_document(doc.file_path)
+        progress_tracker.set(doc_id, "文本分割完成", 40)
+
+        qa = QAService()
+        progress_tracker.set(doc_id, "正在创建向量库...", 60)
         qa.create_vector_store(chunks, doc.id)
+        progress_tracker.set(doc_id, "处理完成", 100)
         DocumentService.update_document_status(
             db, doc, DocumentStatus.READY, chunk_count=len(chunks)
         )
@@ -80,7 +88,7 @@ async def process_document(
         DocumentService.update_document_status(
             db, doc, DocumentStatus.FAILED, error_message=str(e)
         )
-        raise HTTPException(status_code=500, detail=f"文档处理失败: {str(e)}")
+        raise ProcessingError(str(e))
 
 
 @router.get("/")
@@ -107,6 +115,26 @@ async def list_documents(
     }
 
 
+@router.get("/{doc_id}/content")
+async def get_document_content(doc_id: str, db: Session = Depends(get_db)):
+    """Return the raw file content for preview."""
+    from app.exceptions import DocumentNotFoundError
+    doc = DocumentService.get_document(db, doc_id)
+    if not doc:
+        raise DocumentNotFoundError(doc_id)
+    try:
+        with open(doc.file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(doc.file_path, "r", encoding="gbk") as f:
+                return f.read()
+        except Exception:
+            raise HTTPException(status_code=415, detail="Unable to decode file content for preview")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+
 @router.get("/{doc_id}")
 async def get_document(
     doc_id: str,
@@ -114,7 +142,7 @@ async def get_document(
 ):
     doc = DocumentService.get_document(db, doc_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="文档不存在")
+        raise DocumentNotFoundError(doc_id)
     return {
         "id": doc.id,
         "filename": doc.filename,
@@ -135,7 +163,7 @@ async def delete_document(
 ):
     doc = DocumentService.get_document(db, doc_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="文档不存在")
+        raise DocumentNotFoundError(doc_id)
 
     qa = QAService()
     qa.delete_vector_store(doc.id)

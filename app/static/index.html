@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SmartDocQA - 智能文档问答助手</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=1.3">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
 </head>
 <body>
@@ -41,10 +41,51 @@
 
     <!-- Main Panel -->
     <main class="main-panel">
-      <!-- Top Bar -->
+      
+        <!-- History Panel (slide-in from right) -->
+        <div class="history-panel" id="history-panel">
+          <div class="history-panel-header">
+            <h3>📜 问答历史</h3>
+            <button class="btn-icon" onclick="document.getElementById('history-panel').classList.remove('open')">✕</button>
+          </div>
+          <div class="history-panel-body" id="history-panel-body">
+            <div class="empty-state"><p>暂无问答记录</p></div>
+          </div>
+        </div>
+        <!-- Preview Modal -->
+        <div class="preview-overlay" id="preview-modal" style="display:none;">
+          <div class="preview-card">
+            <div class="preview-header">
+              <h3 style="font-size:14px;font-weight:600;" id="preview-title">文档预览</h3>
+              <button class="btn-icon" onclick="document.getElementById('preview-modal').style.display='none'">✕</button>
+            </div>
+            <div class="preview-body" id="preview-content">
+              <div class="empty-state"><p>⏳ 加载中...</p></div>
+            </div>
+          </div>
+        </div>
+        <!-- Processing Modal -->
+        <div class="processing-overlay" id="processing-modal" style="display:none;">
+          <div class="processing-card">
+            <div class="processing-icon">⚙️</div>
+            <h3 id="processing-title">正在处理文档...</h3>
+            <p id="processing-filename"></p>
+            <div class="processing-stages" id="processing-stages">
+              <div class="stage" data-stage="read"><span class="stage-icon">○</span><span class="stage-text">读取文件内容</span></div>
+              <div class="stage" data-stage="split"><span class="stage-icon">○</span><span class="stage-text">智能文本分割</span></div>
+              <div class="stage" data-stage="embed"><span class="stage-icon">○</span><span class="stage-text">AI 向量嵌入</span></div>
+              <div class="stage" data-stage="store"><span class="stage-icon">○</span><span class="stage-text">构建检索索引</span></div>
+            </div>
+            <div class="processing-progress"><div class="processing-bar" id="processing-bar"></div></div>
+            <p class="processing-hint">处理速度取决于文档大小和 AI 服务响应时间</p>
+          </div>
+        </div>
+
+<!-- Top Bar -->
       <header class="top-bar">
         <h1 id="page-title">💬 AI 智能问答</h1>
         <div class="top-bar-right">
+          <button class="btn btn-secondary btn-sm" id="theme-toggle-btn" onclick="toggleTheme()" title="切换暗色/亮色模式">☀️</button>
           <span id="doc-count-badge" class="badge badge-primary">0 个文档</span>
           <span class="badge badge-success">RAG v1.0</span>
         </div>
@@ -101,6 +142,7 @@
                 <p id="chat-doc-status">请先在左侧选择一个已处理的文档</p>
               </div>
               <button class="btn btn-secondary btn-sm" onclick="clearChat()">🗑️ 清空对话</button>
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('history-panel').classList.toggle('open')" title="问答历史">📜</button>
             </div>
             <div class="chat-messages" id="chat-messages">
               <div class="chat-empty">
@@ -125,6 +167,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=1.3"></script>
 </body>
 </html>

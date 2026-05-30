@@ -1,3 +1,4 @@
+// ─── State ────────────────────────────────────────────
 let selectedDocId = null;
 let selectedDocName = null;
 let selectedDocReady = false;
@@ -5,6 +6,26 @@ let conversationId = null;
 
 const API_BASE = '';
 const STORAGE_PREFIX = 'smartdocqa_conv_';
+const THEME_KEY = 'smartdocqa_theme';
+
+// ─── Dark / Light Mode ────────────────────────────────
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY) || 'dark';
+  applyTheme(saved);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  const next = current === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  localStorage.setItem(THEME_KEY, next);
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('theme-toggle-btn');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
 
 // ─── Persistence (per-document) ─────────────────────────
 function _storageKey(docId) {
@@ -14,7 +35,8 @@ function _storageKey(docId) {
 function saveConversation() {
   if (!selectedDocId) return;
   const messages = buildMessageList();
-  if (messages.length === 0) return;
+  console.log('[SMARTDOC] saveConversation: saving', messages.length, 'msgs for', selectedDocName);
+  if (messages.length === 0) { console.log('[SMARTDOC] saveConversation: empty, skipping'); return; }
   const data = {
     docId: selectedDocId,
     docName: selectedDocName,
@@ -32,6 +54,7 @@ function saveConversation() {
 function loadConversation(docId) {
   try {
     const raw = sessionStorage.getItem(_storageKey(docId));
+    console.log('[SMARTDOC] loadConversation: key=', _storageKey(docId), 'found=', !!raw);
     if (!raw) return null;
     return JSON.parse(raw);
   } catch { return null; }
@@ -75,6 +98,50 @@ function showToast(message, type = 'info') {
   toast.innerHTML = `<span>${icons[type] || ''}</span> ${message}`;
   container.appendChild(toast);
   setTimeout(() => { toast.remove(); }, 5000);
+}
+
+/* ============================================
+   WebSocket Progress (replaces fake progress)
+   ============================================ */
+function connectProgressWS(docId, filename) {
+  showProcessingModal(filename);
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${location.host}/ws/progress/${docId}`;
+  const ws = new WebSocket(wsUrl);
+
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.type === 'progress') {
+        document.getElementById('processing-bar').style.width = data.percent + '%';
+        document.getElementById('processing-title').textContent = data.stage;
+
+        // Update stage indicators
+        const pct = data.percent;
+        if (pct >= 10) updateProcessingStage('read', true);
+        if (pct >= 30) updateProcessingStage('split', true);
+        if (pct >= 50) updateProcessingStage('embed', true);
+        if (pct >= 80) updateProcessingStage('store', true);
+
+        if (pct >= 100) {
+          document.getElementById('processing-title').textContent = '✅ 处理完成';
+          setTimeout(() => {
+            hideProcessingModal();
+            showToast(`✅ "${filename}" 处理完成`, 'success');
+            refreshDocs();
+            ws.close();
+          }, 800);
+        }
+      }
+    } catch (err) {}
+  };
+
+  ws.onerror = () => {
+    // WebSocket failed — fall back to old polling-style
+    console.log('[WS] connection failed, falling back to fetch');
+  };
+
+  ws.onclose = () => {};
 }
 
 /* ============================================
@@ -344,44 +411,27 @@ async function processDocumentAfterUpload(docId, filename) {
 }
 
 async function processDocument(docId, filename) {
-  showProcessingModal(filename);
-  updateProcessingStage('read', false);
-  document.getElementById('processing-bar').style.width = '5%';
-  await sleep(400);
-  updateProcessingStage('read', true);
-  updateProcessingStage('split', false);
-  document.getElementById('processing-bar').style.width = '25%';
-  await sleep(400);
-  updateProcessingStage('split', true);
-  updateProcessingStage('embed', false);
-  document.getElementById('processing-bar').style.width = '45%';
+  // Try WebSocket progress, with fetch fallback
+  connectProgressWS(docId, filename);
 
   try {
     const resp = await fetch(`${API_BASE}/api/v1/documents/${docId}/process`, { method: 'POST' });
-
     if (resp.ok) {
-      updateProcessingStage('embed', true);
-      updateProcessingStage('store', false);
-      document.getElementById('processing-bar').style.width = '80%';
-      await sleep(500);
       const data = await resp.json();
-      updateProcessingStage('store', true);
-      document.getElementById('processing-bar').style.width = '100%';
-      document.getElementById('processing-title').textContent = '✅ 处理完成';
-      await sleep(800);
-      hideProcessingModal();
-      showToast(`✅ 处理完成 (${data.chunk_count} 个分块)`, 'success');
-      refreshDocs();
+      // If WS is active, it'll handle completion
+      if (!document.getElementById('processing-modal')?.style.display ||
+          document.getElementById('processing-modal').style.display === 'none') {
+        hideProcessingModal();
+        showToast(`✅ 处理完成 (${data.chunk_count} 个分块)`, 'success');
+        refreshDocs();
+      }
     } else {
-      document.getElementById('processing-title').textContent = '❌ 处理失败';
-      const err = await resp.json();
       hideProcessingModal();
-      const errMsg = err.detail || '未知错误';
-      showToast(`处理失败: ${errMsg}`, 'error');
+      const err = await resp.json();
+      showToast(`处理失败: ${err.detail || '未知错误'}`, 'error');
       refreshDocs();
     }
   } catch (e) {
-    document.getElementById('processing-title').textContent = '❌ 处理异常';
     hideProcessingModal();
     showToast('处理异常: ' + e.message, 'error');
     refreshDocs();
@@ -479,6 +529,7 @@ function renderDocList(items) {
 function selectDocument(docId, filename, status) {
   // Save current document's conversation before switching
   if (selectedDocId && selectedDocId !== docId) {
+    console.log('[SMARTDOC] selectDocument: switching from', selectedDocName, 'to', filename);
     saveConversation();
   }
 
@@ -552,7 +603,7 @@ function escapeHtml(str) {
 }
 
 /* ============================================
-   Chat
+   Chat — SSE Streaming
    ============================================ */
 async function sendMessage() {
   const question = chatInput.value.trim();
@@ -565,7 +616,10 @@ async function sendMessage() {
 
   // Persist user message immediately
   appendMessageEl('user', question, null, true);
-  showTypingIndicator();
+
+  // Create streaming assistant bubble
+  const streamMsg = createStreamingMessage();
+  let fullAnswer = '';
 
   const payload = {
     document_id: selectedDocId,
@@ -577,36 +631,121 @@ async function sendMessage() {
   };
 
   try {
-    const resp = await fetch(`${API_BASE}/api/v1/qa/ask`, {
+    // SSE via streaming fetch
+    const resp = await fetch(`${API_BASE}/api/v1/qa/ask-stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
 
-    removeTypingIndicator();
-
-    if (resp.ok) {
-      const data = await resp.json();
-      // Capture conversation_id for subsequent turns
-      if (data.conversation_id) {
-        conversationId = data.conversation_id;
-      }
-      // Parse sources
-      const sources = (data.source_details || []).map(s => s.source);
-      appendMessageEl('assistant', data.answer, sources, true);
-      updateChatHeader(); // refresh turn count
-    } else {
+    if (!resp.ok) {
+      removeStreamingMessage(streamMsg);
       const err = await resp.json();
       appendMessageEl('assistant', `❌ 出错了：${err.detail || '请求失败'}`, null, true);
+      chatInput.disabled = false; btnSend.disabled = false; chatInput.focus();
+      return;
     }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let metaSources = [];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // incomplete line stays in buffer
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const jsonStr = line.slice(6);
+        try {
+          const evt = JSON.parse(jsonStr);
+          if (evt.type === 'meta') {
+            if (evt.conversation_id) conversationId = evt.conversation_id;
+            metaSources = (evt.source_details || []).map(s => s.source);
+          } else if (evt.type === 'token') {
+            fullAnswer += evt.text;
+            updateStreamingContent(streamMsg, fullAnswer);
+          } else if (evt.type === 'done') {
+            // finalize
+          }
+        } catch (e) {}
+      }
+    }
+
+    // Replace streaming bubble with final rendered version
+    finalizeStreamingMessage(streamMsg, fullAnswer, metaSources, true);
+    updateChatHeader();
   } catch (e) {
-    removeTypingIndicator();
+    removeStreamingMessage(streamMsg);
     appendMessageEl('assistant', `❌ 网络错误：${e.message}`, null, true);
   }
 
   chatInput.disabled = false;
   btnSend.disabled = false;
   chatInput.focus();
+}
+
+/* Streaming message helpers */
+function createStreamingMessage() {
+  const empty = chatMessages.querySelector('.chat-empty');
+  if (empty) empty.remove();
+
+  const msg = document.createElement('div');
+  msg.className = 'message assistant streaming';
+  msg.innerHTML = `
+    <div class="message-avatar">🤖</div>
+    <div class="message-bubble">
+      <span id="stream-text-${Date.now()}" class="stream-content"></span>
+      <span class="stream-cursor">▊</span>
+    </div>`;
+  chatMessages.appendChild(msg);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return msg;
+}
+
+function updateStreamingContent(msg, text) {
+  const span = msg.querySelector('.stream-content');
+  if (span) {
+    span.textContent = text;
+    msg.querySelector('.message-bubble').classList.remove('streaming-pulse');
+    msg.querySelector('.message-bubble').classList.add('streaming-pulse');
+  }
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function removeStreamingMessage(msg) {
+  if (msg) msg.remove();
+}
+
+function finalizeStreamingMessage(msg, text, sources, persist) {
+  if (!msg) return;
+  msg.classList.remove('streaming');
+
+  const bubble = msg.querySelector('.message-bubble');
+  bubble.innerHTML = formatAssistantText(text);
+  bubble.classList.remove('streaming-pulse');
+
+  // Remove cursor
+  const cursor = bubble.querySelector('.stream-cursor');
+  if (cursor) cursor.remove();
+
+  if (sources && sources.length > 0) {
+    const sourcesDiv = document.createElement('div');
+    sourcesDiv.className = 'message-sources';
+    sourcesDiv.innerHTML = '📎 来源：' + sources.map(s => {
+      const name = s.split(/[\\/]/).pop();
+      return `<span class="source-tag">${escapeHtml(name)}</span>`;
+    }).join('');
+    bubble.appendChild(sourcesDiv);
+  }
+
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  if (persist) saveConversation();
 }
 
 /**
@@ -870,4 +1009,267 @@ answerStyle.textContent = `
 `;
 document.head.appendChild(answerStyle);
 
+// ── Send Message (replaces sendMessage) ─────────────────
+async function sendMessage() {
+  var question = chatInput.value.trim();
+  if (!question || !selectedDocId || !selectedDocReady) return;
+
+  chatInput.value = '';
+  chatInput.style.height = 'auto';
+  chatInput.disabled = true;
+  btnSend.disabled = true;
+
+  appendMessageEl('user', question, null, true);
+  showTypingIndicator();
+
+  var payload = {
+    document_id: selectedDocId,
+    question: question,
+    top_k: 4,
+    conversation_id: conversationId || undefined,
+    use_hybrid: true,
+    use_rerank: true,
+  };
+
+  try {
+    var resp = await fetch('/api/v1/qa/ask-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    removeTypingIndicator();
+
+    if (!resp.ok) {
+      var err = await resp.json();
+      appendMessageEl('assistant', '\u274c \u51fa\u4e86\u95ee\u9898\uff1a' + (err.detail || '\u8bf7\u6c42\u5931\u8d25'), null, true);
+      chatInput.disabled = false; btnSend.disabled = false; chatInput.focus();
+      return;
+    }
+
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+    var fullText = '';
+    var metaData = { sources: [] };
+
+    // Create a streaming bubble placeholder
+    var streamBubble = createStreamingBubble();
+
+    while (true) {
+      var result = await reader.read();
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+      var lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (var i = 0; i < lines.length; i++) {
+        var ln = lines[i];
+        if (!ln.startsWith('data: ')) continue;
+        try {
+          var evt = JSON.parse(ln.slice(6));
+          if (evt.type === 'meta') {
+            if (evt.conversation_id) conversationId = evt.conversation_id;
+            metaData.sources = (evt.source_details || []).map(function(s) { return s.source; });
+          } else if (evt.type === 'token') {
+            fullText += evt.text;
+            if (streamBubble) streamBubble.textContent = fullText;
+          } else if (evt.type === 'done') {
+            // finalize
+          }
+        } catch(e) {}
+      }
+    }
+
+    // Replace streaming bubble with formatted final answer
+    finalizeStreamBubble(streamBubble, fullText, metaData.sources, true);
+    updateChatHeader();
+  } catch(e) {
+    removeTypingIndicator();
+    var sb = document.getElementById('stream-bubble');
+    if (sb) sb.parentElement.remove();
+    appendMessageEl('assistant', '\u274c \u7f51\u7edc\u9519\u8bef\uff1a' + e.message, null, true);
+  }
+
+  chatInput.disabled = false;
+  btnSend.disabled = false;
+  chatInput.focus();
+}
+
+function createStreamingBubble() {
+  var empty = chatMessages.querySelector('.chat-empty');
+  if (empty) empty.remove();
+
+  var msg = document.createElement('div');
+  msg.className = 'message assistant streaming';
+  msg.innerHTML = '<div class="message-avatar">\ud83e\udd16</div>' +
+    '<div id="stream-bubble" class="message-bubble" style="white-space:pre-wrap;word-break:break-word;"></div>';
+  chatMessages.appendChild(msg);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return document.getElementById('stream-bubble');
+}
+
+function finalizeStreamBubble(bubble, text, sources, persist) {
+  if (!bubble) return;
+  var parent = bubble.parentElement;
+  if (!parent) return;
+  parent.classList.remove('streaming');
+
+  // Format the text
+  bubble.innerHTML = formatAssistantText(text);
+  bubble.removeAttribute('id');
+
+  // Add sources
+  if (sources && sources.length > 0) {
+    var sd = document.createElement('div');
+    sd.className = 'message-sources';
+    sd.innerHTML = '\ud83d\udcce \u6765\u6e90\uff1a' + sources.map(function(s) {
+      var name = s.split(/[\\\\\/]/).pop();
+      return '<span class="source-tag">' + escapeHtml(name) + '</span>';
+    }).join('');
+    bubble.appendChild(sd);
+  }
+
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  if (persist) saveConversation();
+}
+
+// ── History Panel ───────────────────────────────────
+async function loadHistory(docId) {
+  try {
+    var resp = await fetch('/api/v1/qa/history/' + docId + '?limit=100');
+    if (!resp.ok) return;
+    var data = await resp.json();
+    renderHistoryPanel(data.items || []);
+  } catch(e) { console.error('loadHistory:', e); }
+}
+
+function renderHistoryPanel(items) {
+  var panel = document.getElementById('history-panel-body');
+  if (!panel) return;
+  if (!items || items.length === 0) {
+    panel.innerHTML = '<div class=\"empty-state\"><p>\u6682\u65e0\u95ee\u7b54\u8bb0\u5f55</p></div>';
+    return;
+  }
+  var groups = {};
+  for (var i = 0; i < items.length; i++) {
+    var r = items[i];
+    if (!groups[r.conversation_id]) groups[r.conversation_id] = [];
+    groups[r.conversation_id].push(r);
+  }
+  panel.innerHTML = Object.keys(groups).map(function(cid) {
+    var conv = groups[cid];
+    var firstQ = null;
+    for (var j = 0; j < conv.length; j++) {
+      if (conv[j].role === 'user') { firstQ = conv[j]; break; }
+    }
+    var preview = firstQ ? firstQ.content.slice(0, 80) : '(\u7a7a\u5bf9\u8bdd)';
+    var date = conv[0].created_at ? new Date(conv[0].created_at).toLocaleString('zh-CN') : '';
+    return '<div class=\"history-item\" onclick=\"restoreConversation(\x27' + cid + '\x27)\">' +
+      '<div class=\"history-preview\">' + escapeHtml(preview) + (preview.length >= 80 ? '...' : '') + '</div>' +
+      '<div class=\"history-meta\">' + conv.length + ' \u6761 \u00b7 ' + date + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function restoreConversation(convId) {
+  if (!selectedDocId) return;
+  conversationId = convId;
+  chatMessages.innerHTML = '';
+  try {
+    var resp = await fetch('/api/v1/qa/history/' + selectedDocId + '?conversation_id=' + convId + '&limit=100');
+    if (!resp.ok) return;
+    var data = await resp.json();
+    for (var i = 0; i < data.items.length; i++) {
+      appendMessageEl(data.items[i].role, data.items[i].content, null, false);
+    }
+    updateChatHeader();
+    showToast('\u5386\u53f2\u5bf9\u8bdd\u5df2\u6062\u590d', 'info');
+  } catch(e) { console.error('restoreConversation:', e); }
+}
+
+// ── Document Preview ────────────────────────────────
+async function previewDocument(docId) {
+  var modal = document.getElementById('preview-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'preview-modal';
+    modal.className = 'preview-overlay';
+    modal.innerHTML = '<div class=\"preview-card\">' +
+      '<div class=\"preview-header\">' +
+        '<h3 style=\"font-size:14px;font-weight:600;\" id=\"preview-title\">\u6587\u6863\u9884\u89c8</h3>' +
+        '<button class=\"btn-icon\" onclick=\"document.getElementById(\x27preview-modal\x27).style.display=\x27none\x27\">\u2715</button>' +
+      '</div>' +
+      '<div class=\"preview-body\" id=\"preview-content\"></div>' +
+    '</div>';
+    modal.addEventListener('click', function(e) { if (e.target === modal) modal.style.display = 'none'; });
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  document.getElementById('preview-title').textContent = '\u52a0\u8f7d\u4e2d...';
+  document.getElementById('preview-content').innerHTML = '<div class=\"empty-state\"><p>\u23f3 \u52a0\u8f7d\u4e2d...</p></div>';
+
+  try {
+    var docResp = await fetch('/api/v1/documents/' + docId);
+    if (!docResp.ok) throw new Error();
+    var doc = await docResp.json();
+    document.getElementById('preview-title').textContent = doc.filename;
+
+    if (doc.file_type === '.txt' || doc.file_type === '.md') {
+      var textResp = await fetch('/api/v1/documents/' + docId + '/content');
+      if (textResp.ok) {
+        var text = await textResp.text();
+        document.getElementById('preview-content').innerHTML =
+          '<pre style=\"white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.7;\">' +
+          escapeHtml(text.slice(0, 30000)) + '</pre>';
+      }
+    } else if (doc.file_type === '.csv') {
+      var csvResp = await fetch('/api/v1/documents/' + docId + '/content');
+      if (csvResp.ok) {
+        var csvText = await csvResp.text();
+        var rows = csvText.split('\n').slice(0, 200).map(function(r) {
+          var cells = r.split(',').map(function(c) {
+            return '<td style=\"border:1px solid var(--border);padding:4px 8px;font-size:12px;\">' +
+              escapeHtml(c.trim()) + '</td>';
+          }).join('');
+          return '<tr>' + cells + '</tr>';
+        }).join('');
+        document.getElementById('preview-content').innerHTML =
+          '<div style=\"overflow:auto;max-height:60vh;\"><table style=\"border-collapse:collapse;width:100%;font-size:12px;\">' +
+          rows + '</table></div>';
+      }
+    } else {
+      document.getElementById('preview-content').innerHTML =
+        '<div class=\"empty-state\"><p>\ud83d\udcc4 ' + escapeHtml(doc.filename) + ' (' +
+        formatSize(doc.file_size) + ')</p><p style=\"margin-top:8px;font-size:12px;\">' +
+        '\u6b64\u683c\u5f0f\u6682\u4e0d\u652f\u6301\u5728\u7ebf\u9884\u89c8</p></div>';
+    }
+  } catch(e) {
+    document.getElementById('preview-content').innerHTML =
+      '<div class=\"empty-state\"><p>\u274c \u52a0\u8f7d\u5931\u8d25</p></div>';
+  }
+}
+
+// ── Dark Mode ───────────────────────────────────────
+function initTheme() {
+  var saved = 'dark';
+  try { saved = localStorage.getItem('smartdocqa_theme') || 'dark'; } catch(e) {}
+  applyTheme(saved);
+}
+
+function toggleTheme() {
+  var cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  var next = cur === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  try { localStorage.setItem('smartdocqa_theme', next); } catch(e) {}
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  var btn = document.getElementById('theme-toggle-btn');
+  if (btn) btn.textContent = theme === 'dark' ? '\u2600\ufe0f' : '\ud83c\udf19';
+}
+
+// ── Init ────────────────────────────────────────────
+initTheme();
 refreshDocs();

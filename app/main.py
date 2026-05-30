@@ -7,14 +7,16 @@ if str(_project_root) not in sys.path:
 
 import uvicorn
 from sqlalchemy import create_engine, text
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.core.config import get_settings
 from app.db.database import engine, SessionLocal, Base
+from app.exceptions import AppException
 from app.api import documents, qa
+from app.services.progress_ws import progress_tracker
 
 settings = get_settings()
 
@@ -71,6 +73,60 @@ def create_app() -> FastAPI:
 
     app.include_router(documents.router)
     app.include_router(qa.router)
+
+    # ── Global exception handlers ───────────────────────
+
+    @app.exception_handler(AppException)
+    async def app_exception_handler(request: Request, exc: AppException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": exc.message,
+                "detail": exc.detail,
+                "type": type(exc).__name__,
+            },
+        )
+
+    @app.exception_handler(ValueError)
+    async def value_error_handler(request: Request, exc: ValueError):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "参数错误", "detail": str(exc)},
+        )
+
+    @app.exception_handler(RuntimeError)
+    async def runtime_error_handler(request: Request, exc: RuntimeError):
+        return JSONResponse(
+            status_code=500,
+            content={"error": "服务运行时错误", "detail": str(exc)},
+        )
+
+    @app.exception_handler(Exception)
+    async def catchall_handler(request: Request, exc: Exception):
+        # Don't catch AppException subclasses again
+        if isinstance(exc, AppException):
+            raise exc
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "服务器内部错误",
+                "detail": "发生未预期的错误，请检查日志",
+                "type": type(exc).__name__,
+            },
+        )
+
+    @app.websocket("/ws/progress/{doc_id}")
+    async def ws_progress(doc_id: str, websocket: WebSocket):
+        """WebSocket 端点 —— 客户端连接后实时接收文档处理进度。"""
+        await websocket.accept()
+        await progress_tracker.subscribe(doc_id, websocket)
+        try:
+            while True:
+                await websocket.receive_text()  # keep-alive
+        except Exception:
+            pass
+        finally:
+            await progress_tracker.unsubscribe(doc_id, websocket)
 
     @app.get("/health")
     async def health_check():
