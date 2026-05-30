@@ -1,13 +1,18 @@
 let selectedDocId = null;
 let selectedDocName = null;
 let selectedDocReady = false;
-let conversationId = null;           // ← persisted in sessionStorage
+let conversationId = null;
 
 const API_BASE = '';
-const STORAGE_KEY = 'smartdocqa_conversation';
+const STORAGE_PREFIX = 'smartdocqa_conv_';
 
-// ─── Persistence ──────────────────────────────────────────
+// ─── Persistence (per-document) ─────────────────────────
+function _storageKey(docId) {
+  return STORAGE_PREFIX + docId;
+}
+
 function saveConversation() {
+  if (!selectedDocId) return;
   const messages = buildMessageList();
   if (messages.length === 0) return;
   const data = {
@@ -17,19 +22,24 @@ function saveConversation() {
     messages: messages,
     savedAt: new Date().toISOString(),
   };
-  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  try {
+    sessionStorage.setItem(_storageKey(selectedDocId), JSON.stringify(data));
+  } catch (e) {
+    console.warn('saveConversation failed:', e);
+  }
 }
 
-function loadConversation() {
+function loadConversation(docId) {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
+    const raw = sessionStorage.getItem(_storageKey(docId));
     if (!raw) return null;
     return JSON.parse(raw);
   } catch { return null; }
 }
 
-function clearStoredConversation() {
-  sessionStorage.removeItem(STORAGE_KEY);
+function clearStoredConversation(docId) {
+  const id = docId || selectedDocId;
+  if (id) sessionStorage.removeItem(_storageKey(id));
 }
 
 function buildMessageList() {
@@ -393,7 +403,7 @@ async function deleteDocument(docId) {
         selectedDocName = null;
         selectedDocReady = false;
         conversationId = null;
-        clearStoredConversation();
+        clearStoredConversation(docId);
         updateChatHeader();
       }
       showToast('文档已删除', 'info');
@@ -467,10 +477,13 @@ function renderDocList(items) {
 }
 
 function selectDocument(docId, filename, status) {
-  // Switching docs = start a new conversation
+  // Save current document's conversation before switching
+  if (selectedDocId && selectedDocId !== docId) {
+    saveConversation();
+  }
+
   if (docId !== selectedDocId) {
     conversationId = null;
-    clearStoredConversation();
   }
   selectedDocId = docId;
   selectedDocName = filename;
@@ -479,17 +492,14 @@ function selectDocument(docId, filename, status) {
   renderDocListFromCache();
 
   if (selectedDocReady) {
-    // Try to restore stored conversation for this doc
-    const stored = loadConversation();
-    if (stored && stored.docId === selectedDocId && stored.messages && stored.messages.length > 0) {
+    const stored = loadConversation(selectedDocId);
+    if (stored && stored.messages && stored.messages.length > 0) {
       conversationId = stored.conversationId;
-      // Restore UI
       chatMessages.innerHTML = '';
       stored.messages.forEach(msg => {
-        appendMessageEl(msg.role, msg.text, null, false /* no save */);
+        appendMessageEl(msg.role, msg.text, null, false);
       });
     } else {
-      // Fresh start for this doc
       clearChat();
     }
   }
@@ -649,54 +659,155 @@ function appendMessageEl(role, content, sources, persist) {
 }
 
 /**
- * Render assistant plain-text answer with proper line breaks.
- * Converts plain text → safe HTML (no Markdown interpretation).
- * Key sections are highlighted via CSS classes.
+ * Render assistant plain-text answer into semantic HTML.
+ *
+ * Structure produced:
+ *   <div class="ans-section">
+ *     <div class="ans-header">结论：</div>
+ *     <div class="ans-body">...content / lists...</div>
+ *   </div>
+ *   <div class="ans-section">...
+ *
+ * Lists are rendered as <ol>/<ul> where possible.
  */
 function formatAssistantText(text) {
   if (!text) return '';
-  // Escape HTML first
-  let html = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 
-  // Strip Markdown markers (bold, italic, headers) — LLMs may still emit them
-  html = html
-    .replace(/\*\*/g, '')       // **bold**
-    .replace(/__/g, '')         // __underline__
-    .replace(/^#{1,6}\s/gm, '') // ## headers
-    .replace(/\*\*(?=[^\n])/g, '') // any stragglers
+  // 1 ▸ Strip Markdown artifacts the LLM may still emit
+  text = text
+    .replace(/\*\*/g, '')
+    .replace(/__/g, '')
+    .replace(/^#{1,6}\s/gm, '');
 
-  // Convert line breaks to <br>
-  html = html.replace(/\n/g, '<br>');
+  // 2 ▸ Split into lines
+  const lines = text.split('\n');
 
-  // Style "结论：" lines (bold label + content)
-  html = html.replace(
-    /(结论[：:]\s*)(.*?)(<br>|$)/gi,
-    '<span class="answer-label">结论：</span><span class="answer-content">$2</span>'
-  );
+  // 3 ▸ Classify each line
+  const SECTION_RE = /^(结论|依据|引用|分析|注意|补充|说明|总结|拓展|备注)[：:]\s*/;
+  const OL_RE     = /^(\d{1,2})[\.\)、]\s*/;          // 1. 2) 3、
+  const UL_RE     = /^[\-·•—]\s*/;                      // - · • —
 
-  // Style "依据：" lines
-  html = html.replace(
-    /(依据[：:]\s*)(.*?)(<br>|$)/gi,
-    '<span class="answer-label">依据：</span><span class="answer-content">$2</span>'
-  );
+  // 4 ▸ Group consecutive lines into blocks
+  const blocks = [];   // { type: 'section'|'para'|'ol'|'ul', ... }
+  let cur = null;      // current block being built
 
-  // Style "引用：" / "[来源:" lines
-  html = html.replace(
-    /(引用[：:]\s*)(.*?)(<br>|$)/gi,
-    '<span class="answer-label">引用：</span><span class="answer-cite">$2</span>'
-  );
+  function flush() {
+    if (cur) blocks.push(cur);
+    cur = null;
+  }
 
-  // Style "[来源: ...]" inline
-  html = html.replace(
-    /(\[来源[：:][^\]]+\])/g,
-    '<span class="answer-cite">$1</span>'
-  );
+  for (const raw of lines) {
+    const line = raw.trim();
 
-  // "——" section divider → visual separator
-  html = html.replace(/——/g, '<span class="answer-divider">——</span>');
+    // blank line → flush current block
+    if (!line) { flush(); continue; }
+
+    // section header?
+    const sm = line.match(SECTION_RE);
+    if (sm) {
+      flush();
+      cur = { type: 'section', label: sm[1], content: line.slice(sm[0].length).trim(), items: [] };
+      continue;
+    }
+
+    // ordered list item?
+    const om = line.match(OL_RE);
+    if (om) {
+      if (!cur || (cur.type !== 'ol' && cur.type !== 'section')) {
+        flush();
+        cur = { type: 'ol', items: [] };
+      }
+      cur.items.push({ idx: om[1], text: line.slice(om[0].length).trim() });
+      continue;
+    }
+
+    // unordered list item?
+    const um = line.match(UL_RE);
+    if (um) {
+      if (!cur || (cur.type !== 'ul' && cur.type !== 'section')) {
+        flush();
+        cur = { type: 'ul', items: [] };
+      }
+      cur.items.push(line.slice(um[0].length).trim());
+      continue;
+    }
+
+    // plain text — attach to section body or start a paragraph
+    if (cur && cur.type === 'section') {
+      cur.items.push({ text: line });
+    } else if (cur && cur.type === 'para') {
+      cur.text += ' ' + line;
+    } else {
+      flush();
+      cur = { type: 'para', text: line };
+    }
+  }
+  flush();
+
+  // 5 ▸ Render blocks → HTML
+  function esc(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function citeWrap(html) {
+    // highlight [来源: ...] markers
+    return html.replace(
+      /(\[来源[：:][^\]]+\])/g,
+      '<span class="answer-cite">$1</span>'
+    );
+  }
+
+  function renderItems(items) {
+    // Detect if items are a mix of numbered / plain text within a section
+    // Split into sub-blocks: runs of numbered items → <ol>, plain text → <p>
+    const parts = [];
+    let olBuffer = [];
+
+    for (const item of items) {
+      if (item.idx !== undefined) {
+        olBuffer.push(item);
+      } else {
+        if (olBuffer.length) {
+          parts.push('<ol>' + olBuffer.map(o =>
+            '<li>' + citeWrap(esc(o.text)) + '</li>'
+          ).join('') + '</ol>');
+          olBuffer = [];
+        }
+        parts.push('<p>' + citeWrap(esc(item.text)) + '</p>');
+      }
+    }
+    if (olBuffer.length) {
+      parts.push('<ol>' + olBuffer.map(o =>
+        '<li>' + citeWrap(esc(o.text)) + '</li>'
+      ).join('') + '</ol>');
+    }
+    return parts.join('');
+  }
+
+  let html = '';
+  for (const b of blocks) {
+    if (b.type === 'section') {
+      html += '<div class="ans-section">';
+      html += '<div class="ans-header">' + esc(b.label) + '：</div>';
+      if (b.content) {
+        html += '<p>' + citeWrap(esc(b.content)) + '</p>';
+      }
+      if (b.items.length) {
+        html += '<div class="ans-body">' + renderItems(b.items) + '</div>';
+      }
+      html += '</div>';
+    } else if (b.type === 'ol') {
+      html += '<ol>' + b.items.map(o =>
+        '<li>' + citeWrap(esc(o.text)) + '</li>'
+      ).join('') + '</ol>';
+    } else if (b.type === 'ul') {
+      html += '<ul>' + b.items.map(t =>
+        '<li>' + citeWrap(esc(t)) + '</li>'
+      ).join('') + '</ul>';
+    } else if (b.type === 'para') {
+      html += '<p>' + citeWrap(esc(b.text)) + '</p>';
+    }
+  }
 
   return html;
 }
@@ -729,7 +840,7 @@ function clearChat() {
       <p>上传文档并点击「处理」后，AI 将深入理解你的文档内容。你可以像和人类专家对话一样，对文档提出任何问题。</p>
     </div>`;
   conversationId = null;
-  clearStoredConversation();
+  clearStoredConversation(selectedDocId);
   updateChatHeader();
 }
 
@@ -745,36 +856,17 @@ chatInput.addEventListener('input', () => {
   chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
 });
 
-// ── CSS for answer rendering ──────────────────────────────
+// ── CSS for answer rendering (fallback) ──────────────────
 const answerStyle = document.createElement('style');
 answerStyle.textContent = `
-  /* Answer section labels */
-  .answer-label {
-    font-weight: 700;
-    color: #818cf8;       /* accent-light */
-  }
-  /* Answer body text */
-  .answer-content {
-    color: #f1f5f9;
-    line-height: 1.8;
-  }
-  /* Citation / source markers */
   .answer-cite {
     color: #94a3b8;
     font-size: 12px;
   }
-  /* Section divider */
-  .answer-divider {
-    display: inline-block;
-    color: #374151;
-    margin: 6px 0;
-  }
-  /* Conversation badge in header */
   .conv-badge {
     margin-left: 6px;
     font-size: 14px;
   }
-  /* Source tags already in CSS */
 `;
 document.head.appendChild(answerStyle);
 

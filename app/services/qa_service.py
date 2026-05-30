@@ -499,7 +499,11 @@ class QAService:
         return resp.choices[0].message.content
 
     def _format_answer(self, text: str) -> str:
-        """Post-process LLM answer: strip markdown, normalize readability."""
+        """Post-process LLM answer: strip markdown, normalize readability.
+
+        Produces plain-text structured with blank lines between sections
+        and each list item on its own line.
+        """
         import re
 
         # 1 ▸ Remove markdown formatting markers
@@ -507,20 +511,34 @@ class QAService:
         text = re.sub(r'__(.+?)__', r'\1', text)        # __underline__
         text = re.sub(r'^#{1,6}\s', '', text, flags=re.MULTILINE)  # strip headers
 
-        # 2 ▸ Ensure line breaks before section labels (if missing)
-        # Match "结论", "依据", "引用", "分析", "注意" as section starters
-        for label in ['结论', '依据', '引用', '分析', '注意']:
-            # Insert a double newline before the label if it follows text without one
+        # 2 ▸ Ensure ordered-list items each start their own line
+        #    e.g. "1.xxx，2.yyy" or "1.xxx, 2.yyy" → "1.xxx\n2.yyy"
+        text = re.sub(
+            r'(\d{1,2}[\.\)、]\s*\S.*?)\s*[，,]+\s*(?=\d{1,2}[\.\)、]\s)',
+            r'\1\n',
+            text
+        )
+
+        # 3 ▸ Ensure dash/bullet items each start their own line
+        #    e.g. "- xxx，- yyy" or "- xxx, - yyy" → "- xxx\n- yyy"
+        text = re.sub(
+            r'([\-·•]\s*\S.*?)\s*[，,]+\s*(?=[\-·•]\s)',
+            r'\1\n',
+            text
+        )
+
+        # 4 ▸ Insert blank line before section labels (结论/依据/引用/分析/注意)
+        for label in ['结论', '依据', '引用', '分析', '注意', '补充', '说明', '总结', '拓展', '备注']:
             text = re.sub(
                 rf'(?<!\n)(?<!^)({label}[：:]\s*)',
                 r'\n\n\1',
                 text
             )
 
-        # 3 ▸ Normalize excessive blank lines (3+ → 2)
+        # 5 ▸ Normalize excessive blank lines (3+ → 2)
         text = re.sub(r'\n{3,}', '\n\n', text)
 
-        # 4 ▸ Trim leading/trailing whitespace
+        # 6 ▸ Trim leading/trailing whitespace
         text = text.strip()
 
         return text

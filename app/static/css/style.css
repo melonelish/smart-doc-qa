@@ -756,27 +756,81 @@ html, body {
 }
 
 /* ---- Answer Formatting ---- */
-.answer-label {
+/* Section container */
+.ans-section {
+  margin-bottom: 10px;
+  padding: 0;
+}
+
+/* Section header label (结论 / 依据 / 引用 ...) */
+.ans-header {
   font-weight: 700;
-  color: var(--accent-light);
+  color: #818cf8;  /* accent-light */
+  margin-bottom: 3px;
+  font-size: 14px;
 }
 
-.answer-content {
-  color: var(--text-primary);
-  line-height: 1.8;
+/* Content inside section (paragraphs + lists) */
+.ans-body {
+  padding-left: 6px;
 }
 
+/* Paragraphs */
+.ans-body p,
+.ans-section > p {
+  margin: 4px 0;
+  color: #f1f5f9;
+  line-height: 1.7;
+  font-size: 14px;
+}
+
+/* Ordered list */
+.ans-body ol,
+.ans-section ol {
+  margin: 4px 0 4px 18px;
+  color: #f1f5f9;
+}
+
+.ans-body ol li,
+.ans-section ol li {
+  margin: 3px 0;
+  color: #f1f5f9;
+  line-height: 1.65;
+  font-size: 14px;
+  list-style-type: decimal;
+}
+
+/* Unordered list */
+.ans-body ul,
+.ans-section ul {
+  margin: 4px 0 4px 18px;
+  color: #f1f5f9;
+}
+
+.ans-body ul li,
+.ans-section ul li {
+  margin: 3px 0;
+  color: #f1f5f9;
+  line-height: 1.65;
+  font-size: 14px;
+  list-style-type: disc;
+}
+
+/* Free-floating paragraphs (not inside a section) */
+p {
+  color: #f1f5f9;
+  line-height: 1.7;
+  font-size: 14px;
+  margin: 4px 0;
+}
+
+/* Citation / source markers */
 .answer-cite {
-  color: var(--text-muted);
-  font-size: 11px;
+  color: #94a3b8;
+  font-size: 12px;
 }
 
-.answer-divider {
-  display: inline-block;
-  color: var(--border-light);
-  margin: 6px 0;
-}
-
+/* Conversation badge in header */
 .conv-badge {
   margin-left: 6px;
   font-size: 14px;
