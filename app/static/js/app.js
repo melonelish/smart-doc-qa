@@ -1,9 +1,49 @@
 let selectedDocId = null;
 let selectedDocName = null;
 let selectedDocReady = false;
+let conversationId = null;           // ← persisted in sessionStorage
 
 const API_BASE = '';
+const STORAGE_KEY = 'smartdocqa_conversation';
 
+// ─── Persistence ──────────────────────────────────────────
+function saveConversation() {
+  const messages = buildMessageList();
+  if (messages.length === 0) return;
+  const data = {
+    docId: selectedDocId,
+    docName: selectedDocName,
+    conversationId: conversationId,
+    messages: messages,
+    savedAt: new Date().toISOString(),
+  };
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+function loadConversation() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
+function clearStoredConversation() {
+  sessionStorage.removeItem(STORAGE_KEY);
+}
+
+function buildMessageList() {
+  const msgs = chatMessages.querySelectorAll('.message');
+  const list = [];
+  msgs.forEach(m => {
+    const role = m.classList.contains('user') ? 'user' : 'assistant';
+    const text = m.querySelector('.message-bubble')?.innerText || '';
+    if (text) list.push({ role, text });
+  });
+  return list;
+}
+
+// ─── Init ────────────────────────────────────────────────
 const chatMessages = document.getElementById('chat-messages');
 const chatInput = document.getElementById('chat-input');
 const btnSend = document.getElementById('btn-send');
@@ -352,6 +392,8 @@ async function deleteDocument(docId) {
         selectedDocId = null;
         selectedDocName = null;
         selectedDocReady = false;
+        conversationId = null;
+        clearStoredConversation();
         updateChatHeader();
       }
       showToast('文档已删除', 'info');
@@ -425,6 +467,11 @@ function renderDocList(items) {
 }
 
 function selectDocument(docId, filename, status) {
+  // Switching docs = start a new conversation
+  if (docId !== selectedDocId) {
+    conversationId = null;
+    clearStoredConversation();
+  }
   selectedDocId = docId;
   selectedDocName = filename;
   selectedDocReady = status === 'ready';
@@ -432,7 +479,19 @@ function selectDocument(docId, filename, status) {
   renderDocListFromCache();
 
   if (selectedDocReady) {
-    clearChat();
+    // Try to restore stored conversation for this doc
+    const stored = loadConversation();
+    if (stored && stored.docId === selectedDocId && stored.messages && stored.messages.length > 0) {
+      conversationId = stored.conversationId;
+      // Restore UI
+      chatMessages.innerHTML = '';
+      stored.messages.forEach(msg => {
+        appendMessageEl(msg.role, msg.text, null, false /* no save */);
+      });
+    } else {
+      // Fresh start for this doc
+      clearChat();
+    }
   }
 }
 
@@ -444,19 +503,25 @@ function renderDocListFromCache() {
 }
 
 function updateChatHeader() {
+  const convIndicator = conversationId
+    ? `<span class="conv-badge" title="多轮对话中">🔄</span>`
+    : '';
   if (!selectedDocId) {
-    chatDocName.textContent = '选择文档开始对话';
+    chatDocName.innerHTML = '选择文档开始对话';
     chatDocStatus.textContent = '请先在左侧选择一个已处理的文档';
     chatInput.disabled = true;
     btnSend.disabled = true;
   } else if (!selectedDocReady) {
-    chatDocName.textContent = selectedDocName;
+    chatDocName.innerHTML = selectedDocName + convIndicator;
     chatDocStatus.textContent = '⚠️ 文档尚未处理，请先点击 ⚡ 处理';
     chatInput.disabled = true;
     btnSend.disabled = true;
   } else {
-    chatDocName.textContent = selectedDocName;
-    chatDocStatus.textContent = '✅ AI 已就绪，开始提问吧';
+    chatDocName.innerHTML = selectedDocName + convIndicator;
+    const msgCount = chatMessages.querySelectorAll('.message').length;
+    chatDocStatus.textContent = msgCount > 0
+      ? `📖 共 ${msgCount} 条对话，点击「清空对话」重置`
+      : '✅ AI 已就绪，开始提问吧';
     chatInput.disabled = false;
     btnSend.disabled = false;
   }
@@ -488,32 +553,45 @@ async function sendMessage() {
   chatInput.disabled = true;
   btnSend.disabled = true;
 
-  appendMessage('user', question);
+  // Persist user message immediately
+  appendMessageEl('user', question, null, true);
   showTypingIndicator();
+
+  const payload = {
+    document_id: selectedDocId,
+    question: question,
+    top_k: 4,
+    conversation_id: conversationId || undefined,
+    use_hybrid: true,
+    use_rerank: true,
+  };
 
   try {
     const resp = await fetch(`${API_BASE}/api/v1/qa/ask`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        document_id: selectedDocId,
-        question: question,
-        top_k: 4,
-      }),
+      body: JSON.stringify(payload),
     });
 
     removeTypingIndicator();
 
     if (resp.ok) {
       const data = await resp.json();
-      appendMessage('assistant', data.answer, data.sources);
+      // Capture conversation_id for subsequent turns
+      if (data.conversation_id) {
+        conversationId = data.conversation_id;
+      }
+      // Parse sources
+      const sources = (data.source_details || []).map(s => s.source);
+      appendMessageEl('assistant', data.answer, sources, true);
+      updateChatHeader(); // refresh turn count
     } else {
       const err = await resp.json();
-      appendMessage('assistant', `❌ 出错了：${err.detail || '请求失败'}`);
+      appendMessageEl('assistant', `❌ 出错了：${err.detail || '请求失败'}`, null, true);
     }
   } catch (e) {
     removeTypingIndicator();
-    appendMessage('assistant', `❌ 网络错误：${e.message}`);
+    appendMessageEl('assistant', `❌ 网络错误：${e.message}`, null, true);
   }
 
   chatInput.disabled = false;
@@ -521,7 +599,14 @@ async function sendMessage() {
   chatInput.focus();
 }
 
-function appendMessage(role, content, sources) {
+/**
+ * Append a message element to the chat area.
+ * @param {string} role - 'user' or 'assistant'
+ * @param {string} content - plain text content (LLM answers are plain text now)
+ * @param {string[]|null} sources - source filenames
+ * @param {boolean} persist - if true, save conversation to sessionStorage
+ */
+function appendMessageEl(role, content, sources, persist) {
   const empty = chatMessages.querySelector('.chat-empty');
   if (empty) empty.remove();
 
@@ -534,7 +619,15 @@ function appendMessage(role, content, sources) {
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
-  bubble.textContent = content;
+
+  // User messages: plain text
+  // Assistant messages: treat as preformatted plain text with line breaks preserved
+  if (role === 'user') {
+    bubble.textContent = content;
+  } else {
+    // Use innerText-style rendering: line breaks preserved, no Markdown interpretation
+    bubble.innerHTML = formatAssistantText(content);
+  }
 
   message.appendChild(avatar);
   message.appendChild(bubble);
@@ -551,6 +644,61 @@ function appendMessage(role, content, sources) {
 
   chatMessages.appendChild(message);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+
+  if (persist) saveConversation();
+}
+
+/**
+ * Render assistant plain-text answer with proper line breaks.
+ * Converts plain text → safe HTML (no Markdown interpretation).
+ * Key sections are highlighted via CSS classes.
+ */
+function formatAssistantText(text) {
+  if (!text) return '';
+  // Escape HTML first
+  let html = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Strip Markdown markers (bold, italic, headers) — LLMs may still emit them
+  html = html
+    .replace(/\*\*/g, '')       // **bold**
+    .replace(/__/g, '')         // __underline__
+    .replace(/^#{1,6}\s/gm, '') // ## headers
+    .replace(/\*\*(?=[^\n])/g, '') // any stragglers
+
+  // Convert line breaks to <br>
+  html = html.replace(/\n/g, '<br>');
+
+  // Style "结论：" lines (bold label + content)
+  html = html.replace(
+    /(结论[：:]\s*)(.*?)(<br>|$)/gi,
+    '<span class="answer-label">结论：</span><span class="answer-content">$2</span>'
+  );
+
+  // Style "依据：" lines
+  html = html.replace(
+    /(依据[：:]\s*)(.*?)(<br>|$)/gi,
+    '<span class="answer-label">依据：</span><span class="answer-content">$2</span>'
+  );
+
+  // Style "引用：" / "[来源:" lines
+  html = html.replace(
+    /(引用[：:]\s*)(.*?)(<br>|$)/gi,
+    '<span class="answer-label">引用：</span><span class="answer-cite">$2</span>'
+  );
+
+  // Style "[来源: ...]" inline
+  html = html.replace(
+    /(\[来源[：:][^\]]+\])/g,
+    '<span class="answer-cite">$1</span>'
+  );
+
+  // "——" section divider → visual separator
+  html = html.replace(/——/g, '<span class="answer-divider">——</span>');
+
+  return html;
 }
 
 function showTypingIndicator() {
@@ -580,6 +728,9 @@ function clearChat() {
       <h3>开始智能文档问答</h3>
       <p>上传文档并点击「处理」后，AI 将深入理解你的文档内容。你可以像和人类专家对话一样，对文档提出任何问题。</p>
     </div>`;
+  conversationId = null;
+  clearStoredConversation();
+  updateChatHeader();
 }
 
 function handleChatKeydown(e) {
@@ -593,5 +744,38 @@ chatInput.addEventListener('input', () => {
   chatInput.style.height = 'auto';
   chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
 });
+
+// ── CSS for answer rendering ──────────────────────────────
+const answerStyle = document.createElement('style');
+answerStyle.textContent = `
+  /* Answer section labels */
+  .answer-label {
+    font-weight: 700;
+    color: #818cf8;       /* accent-light */
+  }
+  /* Answer body text */
+  .answer-content {
+    color: #f1f5f9;
+    line-height: 1.8;
+  }
+  /* Citation / source markers */
+  .answer-cite {
+    color: #94a3b8;
+    font-size: 12px;
+  }
+  /* Section divider */
+  .answer-divider {
+    display: inline-block;
+    color: #374151;
+    margin: 6px 0;
+  }
+  /* Conversation badge in header */
+  .conv-badge {
+    margin-left: 6px;
+    font-size: 14px;
+  }
+  /* Source tags already in CSS */
+`;
+document.head.appendChild(answerStyle);
 
 refreshDocs();

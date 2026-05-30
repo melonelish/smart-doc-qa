@@ -51,31 +51,42 @@ if settings.hf_endpoint:
 #  SYSTEM PROMPT  — improved with source-citation rules
 # ═══════════════════════════════════════════════════════════
 
-SYSTEM_PROMPT = """你是 SmartDocQA，一个专业的文档智能问答助手。你必须**严格基于**下面提供的文档片段回答问题，不得虚构任何信息。
+SYSTEM_PROMPT = """你是 SmartDocQA，一个专业的文档智能问答助手。你必须严格基于下面提供的文档片段回答问题，不得虚构任何信息。
 
 ## 核心原则
 
-1. **基于文档**：回答中所有事实、数据和结论，必须能在提供的文档片段中找到明确依据
-2. **诚实作答**：如果文档片段不足以回答问题，必须明确说明「根据提供的文档内容，无法回答此问题」，并告知缺少什么信息
-3. **精确引用**：回答中的重要事实请在后面标注引用来源，格式为 `[来源: 文档名, 第X页]` 或 `[来源: 文档名]`
-4. **数据准确**：文档中出现的数字、日期、人名必须原样引用，不得改写或约算
-5. **简洁清晰**：用中文回答，先给结论再展开细节。当文档有具体数据时优先用数据说话
+1. 基于文档：回答中所有事实、数据和结论，必须能在提供的文档片段中找到明确依据。
+2. 诚实作答：如果文档片段不足以回答问题，必须明确说明「根据提供的文档内容，无法回答此问题」，并告知缺少什么信息。
+3. 精确引用：回答中的重要事实请在后面标注引用来源，格式为 [来源: 文档名]。
+4. 数据准确：数字、日期、人名必须原样引用，不得改写或约算。
+5. 简洁清晰：用中文回答，先给结论再展开细节。
 
-## 回答格式
+## 回答格式（严格遵守）
 
-**事实型问题**（能用文档内容直接回答的）：
-- **结论**：一句话点明答案
-- **依据**：逐条列出文档中的关键证据
-- **引用**：标注每条依据对应的 `[来源]`
+你的回答必须按以下结构组织，每个部分之间空一行：
 
-**分析型问题**（需要基于文档进行推断的）：
-- **分析**：推导过程和结论
-- **依据**：支撑推导的文档原文
-- **注意**：明确区分「文档明确给出的信息」和「基于文档的合理推断」
+结论：一句话给出明确答案。
+
+依据：逐条列出文档中的关键证据，每条单独一行。
+
+引用：[来源: xxx] 跟在每条依据后或统一列出。
+
+——
+
+特殊情况（分析型问题）：
+先给出分析推导，再列依据，最后说明哪些是原文、哪些是推断。
+
+——
+
+重要排版规则：
+- 各部分之间必须用空行分隔，不要把所有内容挤在一段
+- 不要使用 Markdown 加粗符号（如 ** 或 __）
+- 不要使用标题符号（如 ## 或 ###）
+- 纯文本自然分段即可
 
 ## 多轮对话
 
-上方可能包含对话历史。如果当前问题与历史对话相关，请结合上下文理解意图；如果无关，忽略历史直接聚焦当前问题。无论是否有历史，你的事实依据必须来自**本次提供的文档片段**。"""
+上方可能包含对话历史。如果当前问题与历史对话相关，请结合上下文理解意图；如果无关，忽略历史直接聚焦当前问题。无论是否有历史，你的事实依据必须来自本次提供的文档片段。"""
 
 # ═══════════════════════════════════════════════════════════
 #  SINGLETON EMBEDDINGS
@@ -487,6 +498,33 @@ class QAService:
         )
         return resp.choices[0].message.content
 
+    def _format_answer(self, text: str) -> str:
+        """Post-process LLM answer: strip markdown, normalize readability."""
+        import re
+
+        # 1 ▸ Remove markdown formatting markers
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)  # **bold** → bold
+        text = re.sub(r'__(.+?)__', r'\1', text)        # __underline__
+        text = re.sub(r'^#{1,6}\s', '', text, flags=re.MULTILINE)  # strip headers
+
+        # 2 ▸ Ensure line breaks before section labels (if missing)
+        # Match "结论", "依据", "引用", "分析", "注意" as section starters
+        for label in ['结论', '依据', '引用', '分析', '注意']:
+            # Insert a double newline before the label if it follows text without one
+            text = re.sub(
+                rf'(?<!\n)(?<!^)({label}[：:]\s*)',
+                r'\n\n\1',
+                text
+            )
+
+        # 3 ▸ Normalize excessive blank lines (3+ → 2)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+
+        # 4 ▸ Trim leading/trailing whitespace
+        text = text.strip()
+
+        return text
+
     # ------- Core Q&A --------------------------------------------
 
     def ask_question(
@@ -598,6 +636,9 @@ class QAService:
 
         # 6 ▸ LLM generation
         answer = self.llm_chat(SYSTEM_PROMPT, user_message)
+
+        # 6b ▸ Post-process answer: strip markdown, normalize formatting
+        answer = self._format_answer(answer)
 
         # 7 ▸ Persist conversation
         convo_id = conversation_id or str(uuid.uuid4())

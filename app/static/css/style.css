@@ -755,6 +755,33 @@ html, body {
   to { transform: translateX(0); opacity: 1; }
 }
 
+/* ---- Answer Formatting ---- */
+.answer-label {
+  font-weight: 700;
+  color: var(--accent-light);
+}
+
+.answer-content {
+  color: var(--text-primary);
+  line-height: 1.8;
+}
+
+.answer-cite {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.answer-divider {
+  display: inline-block;
+  color: var(--border-light);
+  margin: 6px 0;
+}
+
+.conv-badge {
+  margin-left: 6px;
+  font-size: 14px;
+}
+
 /* ---- Empty State ---- */
 .empty-state {
   display: flex;
