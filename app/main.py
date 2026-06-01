@@ -69,6 +69,27 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # ── No-cache headers on static files via raw ASGI ──
+    from starlette.types import ASGIApp, Scope, Receive, Send
+
+    class NoCacheStaticMiddleware:
+        def __init__(self, app: ASGIApp):
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http" and scope["path"].startswith("/static"):
+                async def send_wrapper(message):
+                    if message["type"] == "http.response.start":
+                        headers = [(k, v) for k, v in message.get("headers", []) if k != b"cache-control"]
+                        headers.append((b"cache-control", b"no-cache, no-store, must-revalidate"))
+                        message["headers"] = headers
+                    await send(message)
+                await self.app(scope, receive, send_wrapper)
+            else:
+                await self.app(scope, receive, send)
+
+    app.add_middleware(NoCacheStaticMiddleware)
+
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.include_router(documents.router)

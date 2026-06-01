@@ -35,19 +35,27 @@ function _storageKey(docId) {
 }
 
 function saveConversation() {
-  if (!selectedDocId) return;
+  // Support both document mode and KB mode
+  var targetId = selectedDocId || selectedKbId;
+  var targetName = selectedDocName || selectedKbName;
+  var targetType = selectedDocId ? 'doc' : (selectedKbId ? 'kb' : null);
+  if (!targetId || !targetType) {
+    console.log('[SMARTDOC] saveConversation: no target, skipping');
+    return;
+  }
   const messages = buildMessageList();
-  console.log('[SMARTDOC] saveConversation: saving', messages.length, 'msgs for', selectedDocName);
+  console.log('[SMARTDOC] saveConversation: saving', messages.length, 'msgs for', targetName, '(' + targetType + ')');
   if (messages.length === 0) { console.log('[SMARTDOC] saveConversation: empty, skipping'); return; }
   const data = {
-    docId: selectedDocId,
-    docName: selectedDocName,
+    id: targetId,
+    name: targetName,
+    type: targetType,
     conversationId: conversationId,
     messages: messages,
     savedAt: new Date().toISOString(),
   };
   try {
-    sessionStorage.setItem(_storageKey(selectedDocId), JSON.stringify(data));
+    sessionStorage.setItem(_storageKey(targetId), JSON.stringify(data));
   } catch (e) {
     console.warn('saveConversation failed:', e);
   }
@@ -63,8 +71,7 @@ function loadConversation(docId) {
 }
 
 function clearStoredConversation(docId) {
-  const id = docId || selectedDocId;
-  if (id) sessionStorage.removeItem(_storageKey(id));
+  if (docId) sessionStorage.removeItem(_storageKey(docId));
 }
 
 function buildMessageList() {
@@ -271,31 +278,30 @@ document.querySelectorAll('.nav-item').forEach(item => {
       view === 'documents' ? '📁 文档管理' : '📤 上传文档';
     if (view === 'upload') {
       document.getElementById('column-left').scrollIntoView({ behavior: 'smooth' });
-      uploadZone.scrollIntoView({ behavior: 'smooth' });
+      triggerUpload();
     }
   });
 });
 
 /* ============================================
-   Upload
+   Upload - Drag & Drop on Document Card
    ============================================ */
-uploadZone.addEventListener('click', () => fileInput.click());
-
-uploadZone.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  uploadZone.classList.add('drag-over');
-});
-
-uploadZone.addEventListener('dragleave', () => {
-  uploadZone.classList.remove('drag-over');
-});
-
-uploadZone.addEventListener('drop', (e) => {
-  e.preventDefault();
-  uploadZone.classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file) uploadFile(file);
-});
+const docCard = document.getElementById('doc-card');
+if (docCard) {
+  docCard.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    docCard.style.borderColor = 'var(--accent)';
+  });
+  docCard.addEventListener('dragleave', () => {
+    docCard.style.borderColor = '';
+  });
+  docCard.addEventListener('drop', (e) => {
+    e.preventDefault();
+    docCard.style.borderColor = '';
+    const file = e.dataTransfer.files[0];
+    if (file) uploadFile(file);
+  });
+}
 
 fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
@@ -481,90 +487,184 @@ async function deleteDocument(docId) {
    ============================================ */
 
 /* ============================================
-   Knowledge Base List
+   Knowledge Base Dropdown
    ============================================ */
+let _kbItemsCache = [];
+
 async function refreshKBs() {
   try {
     const resp = await fetch(`${API_BASE}/api/v1/knowledge-bases/?limit=50`);
     if (!resp.ok) return;
     const data = await resp.json();
-    renderKBList(data.items);
-    if (kbBadge) kbBadge.textContent = `${data.items.length} KB`;
+    _kbItemsCache = data.items || [];
+    renderKBDropdown();
   } catch (e) {
     console.error('Failed to load KBs:', e);
   }
 }
 
-function renderKBList(items) {
-  if (!kbList) return;
-  if (!items || items.length === 0) {
-    kbList.innerHTML = '<div class="empty-state" style="padding:12px;font-size:12px;text-align:center;color:var(--text-muted)">No KB yet - create one</div>';
+function renderKBDropdown() {
+  const container = document.getElementById('kb-dropdown-kbs');
+  const totalCount = document.getElementById('kb-dd-total-count');
+  if (!container) return;
+
+  if (!_kbItemsCache || _kbItemsCache.length === 0) {
+    container.innerHTML = '<div class="kb-dropdown-item" style="color:var(--text-muted);cursor:default;font-size:12px;justify-content:center;">暂无知识库</div>';
+    if (totalCount) totalCount.textContent = '';
     return;
   }
-  kbList.innerHTML = items.map(kb => {
+
+  // Update total doc count on "全部文档" item
+  try {
+    const allCount = document.querySelectorAll('#doc-list .doc-item').length;
+    if (totalCount && allCount > 0) totalCount.textContent = allCount;
+  } catch(e) {}
+
+  container.innerHTML = _kbItemsCache.map(kb => {
     const isActive = kb.id === selectedKbId;
     return `
-      <div class="kb-item${isActive ? ' active' : ''}" data-kb-id="${kb.id}">
-        <div class="kb-item-info" onclick="selectKB('${kb.id}', '${escapeHtml(kb.name)}')">
-          <span class="kb-icon">📚</span>
-          <span class="kb-name">${escapeHtml(kb.name)}</span>
-          <span class="kb-count">${kb.document_count}</span>
-        </div>
-        <button class="btn-icon danger" title="Delete KB" onclick="event.stopPropagation();deleteKB('${kb.id}')">×</button>
+      <div class="kb-dropdown-item${isActive ? ' active' : ''}" onclick="selectKB('${kb.id}', '${escapeHtml(kb.name)}')">
+        <span class="kb-dd-icon">📚</span>
+        <span class="kb-dd-name">${escapeHtml(kb.name)}</span>
+        <span class="kb-dd-count">${kb.document_count || 0}</span>
+        <span class="kb-dd-actions">
+          <button class="dd-btn danger" title="删除" onclick="event.stopPropagation();deleteKB('${kb.id}')">×</button>
+        </span>
       </div>`;
   }).join('');
+
+  // Highlight active items
+  document.querySelectorAll('#kb-dropdown .kb-dropdown-item').forEach(el => {
+    if (!el.dataset.kbId && !el.querySelector('.kb-dd-name')) return;
+    el.classList.toggle('active', el.querySelector('.kb-dd-name') &&
+      _kbItemsCache.some(kb => kb.id === selectedKbId && kb.name === el.querySelector('.kb-dd-name').textContent));
+  });
+  const allDocsItem = document.querySelector('#kb-dropdown .kb-dropdown-item[data-kb-id=""]');
+  if (allDocsItem) allDocsItem.classList.toggle('active', !selectedKbId);
+}
+
+function toggleKbDropdown() {
+  const dropdown = document.getElementById('kb-dropdown');
+  const selector = document.getElementById('kb-selector');
+  const isOpen = dropdown.style.display !== 'none';
+  if (isOpen) {
+    dropdown.style.display = 'none';
+    selector.classList.remove('open');
+  } else {
+    renderKBDropdown();
+    dropdown.style.display = 'block';
+    selector.classList.add('open');
+  }
 }
 
 function selectKB(kbId, kbName) {
-  if (selectedKbId === kbId) {
-    // Deselect
+  var isDeselecting = (selectedKbId === kbId && kbId !== '') || (kbId === '' || !kbId);
+
+  if (isDeselecting) {
+    // Save current KB conversation before deselecting
+    if (selectedKbId) saveConversation();
     selectedKbId = null; selectedKbName = null;
-    conversationId = null;
-    updateChatHeader();
-    renderKBListFromCache();
-    return;
+  } else {
+    // Save current context before switching
+    if (selectedDocId) {
+      saveConversation();
+      selectedDocId = null; selectedDocName = null; selectedDocReady = false;
+    } else if (selectedKbId && selectedKbId !== kbId) {
+      saveConversation();
+    }
+    selectedKbId = kbId;
+    selectedKbName = kbName;
   }
-  if (selectedDocId) {
-    saveConversation();
-    selectedDocId = null; selectedDocName = null; selectedDocReady = false;
-  }
-  selectedKbId = kbId;
-  selectedKbName = kbName;
+
   conversationId = null;
   updateChatHeader();
-  renderKBListFromCache();
-  clearChat();
+  updateUploadBtn();
+  updateSelectorLabel();
+  renderKBDropdown();
+  closeKbDropdown();
+
+  // Try to restore KB conversation from sessionStorage
+  if (selectedKbId) {
+    var stored = loadConversation(selectedKbId);
+    if (stored && stored.messages && stored.messages.length > 0) {
+      conversationId = stored.conversationId;
+      chatMessages.innerHTML = '';
+      stored.messages.forEach(function(msg) {
+        appendMessageEl(msg.role, msg.text, null, false);
+      });
+    } else {
+      clearChat();
+    }
+  } else {
+    clearChat();
+  }
+
+  refreshDocs();
+
+  // Visual: deselect doc items
+  document.querySelectorAll('.doc-item').forEach(el => el.classList.remove('selected'));
 }
 
-function renderKBListFromCache() {
-  document.querySelectorAll('.kb-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.kbId === selectedKbId);
-  });
-  document.querySelectorAll('.doc-item').forEach(el => {
-    el.classList.toggle('selected', el.dataset.docId === selectedDocId);
-  });
+function updateSelectorLabel() {
+  const label = document.getElementById('kb-selector-label');
+  if (!label) return;
+  label.textContent = selectedKbId ? selectedKbName : '全部文档';
+}
+
+function updateUploadBtn() {
+  const btn = document.getElementById('btn-upload');
+  if (!btn) return;
+  if (selectedKbId) {
+    btn.classList.add('kb-active');
+    btn.querySelector('.btn-upload-text').textContent = '上传到知识库';
+  } else {
+    btn.classList.remove('kb-active');
+    btn.querySelector('.btn-upload-text').textContent = '上传';
+  }
+}
+
+function closeKbDropdown() {
+  const dropdown = document.getElementById('kb-dropdown');
+  const selector = document.getElementById('kb-selector');
+  if (dropdown) dropdown.style.display = 'none';
+  if (selector) selector.classList.remove('open');
+}
+
+function triggerUpload() {
+  fileInput.click();
 }
 
 async function deleteKB(kbId) {
-  if (!confirm('Delete this knowledge base? This cannot be undone.')) return;
+  if (!confirm('删除此知识库？此操作不可撤销。')) return;
   try {
     const resp = await fetch(`${API_BASE}/api/v1/knowledge-bases/${kbId}`, { method: 'DELETE' });
     if (resp.ok) {
       if (selectedKbId === kbId) {
         selectedKbId = null; selectedKbName = null; conversationId = null;
         updateChatHeader();
+        updateUploadBtn();
+        updateSelectorLabel();
         clearChat();
       }
-      showToast('Knowledge base deleted', 'info');
+      showToast('知识库已删除', 'info');
     } else {
       const err = await resp.json();
-      showToast('Delete failed: ' + (err.detail || 'error'), 'error');
+      showToast('删除失败: ' + (err.detail || '错误'), 'error');
     }
   } catch (e) {
-    showToast('Delete error: ' + e.message, 'error');
+    showToast('删除异常: ' + e.message, 'error');
   }
   refreshKBs();
+  refreshDocs();
 }
+
+/* Click outside to close dropdown */
+document.addEventListener('click', function(e) {
+  const selector = document.getElementById('kb-selector');
+  if (selector && !selector.contains(e.target)) {
+    closeKbDropdown();
+  }
+});
 
 /* ============================================
    KB Create/Edit Modal
@@ -577,12 +677,12 @@ function showCreateKBModal() {
     modal.className = 'kb-modal-overlay';
     modal.innerHTML = `
       <div class="kb-modal-card">
-        <h3>Create Knowledge Base</h3>
-        <input id="kb-name-input" type="text" placeholder="Knowledge Base Name" maxlength="200" />
-        <textarea id="kb-desc-input" placeholder="Description (optional)" maxlength="1000" rows="3"></textarea>
+        <h3>新建知识库</h3>
+        <input id="kb-name-input" type="text" placeholder="知识库名称" maxlength="200" />
+        <textarea id="kb-desc-input" placeholder="描述（可选）" maxlength="1000" rows="3"></textarea>
         <div class="kb-modal-actions">
-          <button onclick="closeKBModal()">Cancel</button>
-          <button class="primary" onclick="createKB()">Create</button>
+          <button onclick="closeKBModal()">取消</button>
+          <button class="primary" onclick="createKB()">创建</button>
         </div>
       </div>`;
     document.body.appendChild(modal);
@@ -601,7 +701,7 @@ function closeKBModal() {
 async function createKB() {
   const name = document.getElementById('kb-name-input').value.trim();
   const desc = document.getElementById('kb-desc-input').value.trim();
-  if (!name) { showToast('Name is required', 'error'); return; }
+  if (!name) { showToast('名称不能为空', 'error'); return; }
   try {
     const resp = await fetch(`${API_BASE}/api/v1/knowledge-bases/`, {
       method: 'POST',
@@ -610,25 +710,25 @@ async function createKB() {
     });
     if (resp.ok) {
       const kb = await resp.json();
-      showToast(`KB "${kb.name}" created`, 'success');
+      showToast(`知识库 "${kb.name}" 已创建`, 'success');
       closeKBModal();
       refreshKBs();
     } else {
       const err = await resp.json();
-      showToast('Create failed: ' + (err.detail || 'error'), 'error');
+      showToast('创建失败: ' + (err.detail || '错误'), 'error');
     }
   } catch (e) {
-    showToast('Create error: ' + e.message, 'error');
+    showToast('创建异常: ' + e.message, 'error');
   }
 }
 
 async function uploadToKB(file) {
-  if (!selectedKbId) { showToast('Select a KB first', 'warning'); return; }
+  if (!selectedKbId) { showToast('请先选择文档或知识库', 'warning'); return; }
   const maxSize = 10 * 1024 * 1024;
   const allowed = ['.pdf', '.txt', '.md', '.csv', '.docx'];
   const ext = '.' + file.name.split('.').pop().toLowerCase();
-  if (!allowed.includes(ext)) { showToast('Unsupported file type: ' + ext, 'error'); return; }
-  if (file.size > maxSize) { showToast('File exceeds 10MB limit', 'error'); return; }
+  if (!allowed.includes(ext)) { showToast('不支持的文件类型: ' + ext, 'error'); return; }
+  if (file.size > maxSize) { showToast('文件超过 10MB 限制', 'error'); return; }
 
   uploadProgress.classList.add('active');
   uploadFilename.textContent = file.name;
@@ -653,35 +753,44 @@ async function uploadToKB(file) {
     xhr.onload = () => {
       resetUploadProgress();
       if (xhr.status === 200) {
-        const resp = JSON.parse(xhr.responseText);
-        showToast('File uploaded to KB: ' + file.name, 'success');
+        showToast('已上传到知识库: ' + file.name, 'success');
         refreshKBs();
+        refreshDocs();
       } else {
-        const detail = JSON.parse(xhr.responseText).detail || 'Upload failed';
-        showToast('Upload failed: ' + detail, 'error');
+        let detail = '上传失败';
+        try { detail = JSON.parse(xhr.responseText).detail || '上传失败'; } catch(e) {}
+        showToast('上传失败: ' + detail, 'error');
       }
     };
 
     xhr.onerror = () => {
       resetUploadProgress();
-      showToast('Network error', 'error');
+      showToast('网络错误', 'error');
     };
     xhr.send(formData);
   } catch (e) {
     resetUploadProgress();
-    showToast('Upload error: ' + e.message, 'error');
+    showToast('上传异常: ' + e.message, 'error');
   }
 }
 
-
 async function refreshDocs() {
   try {
-    const resp = await fetch(`${API_BASE}/api/v1/documents/?skip=0&limit=50`);
+    let url;
+    if (selectedKbId) {
+      url = `${API_BASE}/api/v1/knowledge-bases/${selectedKbId}/documents`;
+    } else {
+      url = `${API_BASE}/api/v1/documents/?skip=0&limit=50`;
+    }
+    const resp = await fetch(url);
     if (!resp.ok) return;
     const data = await resp.json();
     renderDocList(data.items);
-    document.getElementById('doc-count-badge').textContent =
-      `${data.items.length} 个文档`;
+    const count = data.items ? data.items.length : 0;
+    const badge = document.getElementById('doc-count-badge');
+    if (badge) badge.textContent = `${count} 个文档`;
+    const inlineCount = document.getElementById('doc-count-inline');
+    if (inlineCount) inlineCount.textContent = `${count} 个文档`;
   } catch (e) {
     console.error('获取文档列表失败:', e);
   }
@@ -708,11 +817,10 @@ function renderDocList(items) {
       ready: '就绪', processing: '处理中', uploaded: '待处理', failed: '失败'
     }[doc.status] || doc.status;
     const statusClass = `status-${doc.status}`;
-    const isSelected = doc.id === selectedDocId;
 
     return `
-      <div class="doc-item${isSelected ? ' selected' : ''}" data-doc-id="${doc.id}">
-        <div class="doc-item-info" onclick="selectDocument('${doc.id}', '${escapeHtml(doc.filename)}', '${doc.status}')">
+      <div class="doc-item" data-doc-id="${doc.id}">
+        <div class="doc-item-info" onclick="previewDocument('${doc.id}')" title="点击预览文档内容">
           <div class="doc-icon ${iconClass}">${ext.toUpperCase()}</div>
           <div class="doc-meta">
             <div class="doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.filename)}</div>
@@ -720,6 +828,9 @@ function renderDocList(items) {
           </div>
           <span class="status-tag ${statusClass}">${statusLabel}</span>
         </div>
+        ${doc.status === 'failed' && doc.error_message ? `
+          <div class="doc-error-message" title="${escapeHtml(doc.error_message)}">⚠️ ${escapeHtml(doc.error_message.substring(0, 50))}${doc.error_message.length > 50 ? '...' : ''}</div>
+        ` : ''}
         <div class="doc-actions">
           ${doc.status === 'uploaded' || doc.status === 'failed' ? `
             <button class="btn-icon success" title="处理文档" onclick="event.stopPropagation();processDocument('${doc.id}','${escapeHtml(doc.filename)}')">⚡</button>
@@ -728,43 +839,6 @@ function renderDocList(items) {
         </div>
       </div>`;
   }).join('');
-}
-
-function selectDocument(docId, filename, status) {
-  // Save current document's conversation before switching
-  if (selectedDocId && selectedDocId !== docId) {
-    console.log('[SMARTDOC] selectDocument: switching from', selectedDocName, 'to', filename);
-    saveConversation();
-  }
-
-  if (docId !== selectedDocId) {
-    conversationId = null;
-  }
-  selectedDocId = docId;
-  selectedDocName = filename;
-  selectedDocReady = status === 'ready';
-  updateChatHeader();
-  renderDocListFromCache();
-
-  if (selectedDocReady) {
-    const stored = loadConversation(selectedDocId);
-    if (stored && stored.messages && stored.messages.length > 0) {
-      conversationId = stored.conversationId;
-      chatMessages.innerHTML = '';
-      stored.messages.forEach(msg => {
-        appendMessageEl(msg.role, msg.text, null, false);
-      });
-    } else {
-      clearChat();
-    }
-  }
-}
-
-function renderDocListFromCache() {
-  const items = docList.querySelectorAll('.doc-item');
-  items.forEach(item => {
-    item.classList.toggle('selected', item.dataset.docId === selectedDocId);
-  });
 }
 
 function updateChatHeader() {
@@ -778,25 +852,10 @@ function updateChatHeader() {
     btnSend.disabled = false;
     return;
   }
-  if (!selectedDocId) {
-    chatDocName.innerHTML = 'Select a document or KB to start';
-    chatDocStatus.textContent = 'Pick a doc or create a Knowledge Base';
-    chatInput.disabled = true;
-    btnSend.disabled = true;
-  } else if (!selectedDocReady) {
-    chatDocName.innerHTML = selectedDocName + convIndicator;
-    chatDocStatus.textContent = '⚠️ 文档尚未处理，请先点击 ⚡ 处理';
-    chatInput.disabled = true;
-    btnSend.disabled = true;
-  } else {
-    chatDocName.innerHTML = selectedDocName + convIndicator;
-    const msgCount = chatMessages.querySelectorAll('.message').length;
-    chatDocStatus.textContent = msgCount > 0
-      ? `📖 共 ${msgCount} 条对话，点击「清空对话」重置`
-      : '✅ AI 已就绪，开始提问吧';
-    chatInput.disabled = false;
-    btnSend.disabled = false;
-  }
+  chatDocName.innerHTML = '选择知识库开始对话';
+  chatDocStatus.textContent = '请先选择或创建一个知识库';
+  chatInput.disabled = true;
+  btnSend.disabled = true;
 }
 
 function formatSize(bytes) {
@@ -816,156 +875,6 @@ function escapeHtml(str) {
 /* ============================================
    Chat — SSE Streaming
    ============================================ */
-async function sendMessage() {
-  const question = chatInput.value.trim();
-  if (!question) return;
-  if (!selectedKbId && (!selectedDocId || !selectedDocReady)) return;
-
-  chatInput.value = '';
-  chatInput.style.height = 'auto';
-  chatInput.disabled = true;
-  btnSend.disabled = true;
-
-  // Persist user message immediately
-  appendMessageEl('user', question, null, true);
-
-  // Create streaming assistant bubble
-  const streamMsg = createStreamingMessage();
-  let fullAnswer = '';
-
-  const payload = selectedKbId ? {
-    kb_id: selectedKbId,
-    question: question,
-    top_k: 4,
-    conversation_id: conversationId || undefined,
-    use_hybrid: true,
-    use_rerank: true,
-  } : {
-    document_id: selectedDocId,
-    question: question,
-    top_k: 4,
-    conversation_id: conversationId || undefined,
-    use_hybrid: true,
-    use_rerank: true,
-  };
-
-  try {
-    // SSE via streaming fetch
-    const resp = await fetch(`${API_BASE}/api/v1/qa/ask-stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!resp.ok) {
-      removeStreamingMessage(streamMsg);
-      const err = await resp.json();
-      appendMessageEl('assistant', `❌ 出错了：${err.detail || '请求失败'}`, null, true);
-      chatInput.disabled = false; btnSend.disabled = false; chatInput.focus();
-      return;
-    }
-
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let metaSources = [];
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // incomplete line stays in buffer
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const jsonStr = line.slice(6);
-        try {
-          const evt = JSON.parse(jsonStr);
-          if (evt.type === 'meta') {
-            if (evt.conversation_id) conversationId = evt.conversation_id;
-            metaSources = (evt.source_details || []).map(s => s.source);
-          } else if (evt.type === 'token') {
-            fullAnswer += evt.text;
-            updateStreamingContent(streamMsg, fullAnswer);
-          } else if (evt.type === 'done') {
-            // finalize
-          }
-        } catch (e) {}
-      }
-    }
-
-    // Replace streaming bubble with final rendered version
-    finalizeStreamingMessage(streamMsg, fullAnswer, metaSources, true);
-    updateChatHeader();
-  } catch (e) {
-    removeStreamingMessage(streamMsg);
-    appendMessageEl('assistant', `❌ 网络错误：${e.message}`, null, true);
-  }
-
-  chatInput.disabled = false;
-  btnSend.disabled = false;
-  chatInput.focus();
-}
-
-/* Streaming message helpers */
-function createStreamingMessage() {
-  const empty = chatMessages.querySelector('.chat-empty');
-  if (empty) empty.remove();
-
-  const msg = document.createElement('div');
-  msg.className = 'message assistant streaming';
-  msg.innerHTML = `
-    <div class="message-avatar">🤖</div>
-    <div class="message-bubble">
-      <span id="stream-text-${Date.now()}" class="stream-content"></span>
-      <span class="stream-cursor">▊</span>
-    </div>`;
-  chatMessages.appendChild(msg);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-  return msg;
-}
-
-function updateStreamingContent(msg, text) {
-  const span = msg.querySelector('.stream-content');
-  if (span) {
-    span.textContent = text;
-    msg.querySelector('.message-bubble').classList.remove('streaming-pulse');
-    msg.querySelector('.message-bubble').classList.add('streaming-pulse');
-  }
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-function removeStreamingMessage(msg) {
-  if (msg) msg.remove();
-}
-
-function finalizeStreamingMessage(msg, text, sources, persist) {
-  if (!msg) return;
-  msg.classList.remove('streaming');
-
-  const bubble = msg.querySelector('.message-bubble');
-  bubble.innerHTML = formatAssistantText(text);
-  bubble.classList.remove('streaming-pulse');
-
-  // Remove cursor
-  const cursor = bubble.querySelector('.stream-cursor');
-  if (cursor) cursor.remove();
-
-  if (sources && sources.length > 0) {
-    const sourcesDiv = document.createElement('div');
-    sourcesDiv.className = 'message-sources';
-    sourcesDiv.innerHTML = '📎 来源：' + sources.map(s => {
-      const name = s.split(/[\\/]/).pop();
-      return `<span class="source-tag">${escapeHtml(name)}</span>`;
-    }).join('');
-    bubble.appendChild(sourcesDiv);
-  }
-
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-  if (persist) saveConversation();
-}
 
 /**
  * Append a message element to the chat area.
@@ -1193,12 +1102,12 @@ function removeTypingIndicator() {
 function clearChat() {
   chatMessages.innerHTML = `
     <div class="chat-empty">
-      <div class="empty-icon">🤖</div>
-      <h3>开始智能文档问答</h3>
-      <p>上传文档并点击「处理」后，AI 将深入理解你的文档内容。你可以像和人类专家对话一样，对文档提出任何问题。</p>
+      <div class="empty-icon">🧠</div>
+      <h3>知识库问答模式</h3>
+      <p>${selectedKbName ? `你已选择「${selectedKbName}」，AI 将检索知识库内所有文档来回答。直接输入问题开始吧！` : '请先选择或创建一个知识库，然后向 AI 提问。'}</p>
     </div>`;
   conversationId = null;
-  clearStoredConversation(selectedDocId);
+  clearStoredConversation(selectedKbId);
   updateChatHeader();
 }
 
@@ -1228,11 +1137,15 @@ answerStyle.textContent = `
 `;
 document.head.appendChild(answerStyle);
 
-// ── Send Message (replaces sendMessage) ─────────────────
+// ── Send Message ─────────────────────────────────────
 async function sendMessage() {
   var question = chatInput.value.trim();
   if (!question) return;
-  if (!selectedKbId && (!selectedDocId || !selectedDocReady)) return;
+
+  if (!selectedKbId) {
+    showToast('请先选择文档或知识库', 'warning');
+    return;
+  }
 
   chatInput.value = '';
   chatInput.style.height = 'auto';
@@ -1243,7 +1156,7 @@ async function sendMessage() {
   showTypingIndicator();
 
   var payload = {
-    document_id: selectedDocId,
+    kb_id: selectedKbId,
     question: question,
     top_k: 4,
     conversation_id: conversationId || undefined,
@@ -1262,7 +1175,7 @@ async function sendMessage() {
 
     if (!resp.ok) {
       var err = await resp.json();
-      appendMessageEl('assistant', '\u274c \u51fa\u4e86\u95ee\u9898\uff1a' + (err.detail || '\u8bf7\u6c42\u5931\u8d25'), null, true);
+      appendMessageEl('assistant', '❌ 出了问题：' + (err.detail || '请求失败'), null, true);
       chatInput.disabled = false; btnSend.disabled = false; chatInput.focus();
       return;
     }
@@ -1273,8 +1186,15 @@ async function sendMessage() {
     var fullText = '';
     var metaData = { sources: [] };
 
-    // Create a streaming bubble placeholder
-    var streamBubble = createStreamingBubble();
+    var streamMsg = document.createElement('div');
+    streamMsg.className = 'message assistant streaming';
+    streamMsg.innerHTML = '<div class="message-avatar">🤖</div>' +
+      '<div class="message-bubble" style="white-space:pre-wrap;word-break:break-word;"></div>';
+    var empty = chatMessages.querySelector('.chat-empty');
+    if (empty) empty.remove();
+    chatMessages.appendChild(streamMsg);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    var streamBubble = streamMsg.querySelector('.message-bubble');
 
     while (true) {
       var result = await reader.read();
@@ -1294,21 +1214,30 @@ async function sendMessage() {
           } else if (evt.type === 'token') {
             fullText += evt.text;
             if (streamBubble) streamBubble.textContent = fullText;
-          } else if (evt.type === 'done') {
-            // finalize
           }
         } catch(e) {}
       }
     }
 
-    // Replace streaming bubble with formatted final answer
-    finalizeStreamBubble(streamBubble, fullText, metaData.sources, true);
+    streamMsg.classList.remove('streaming');
+    if (streamBubble) {
+      streamBubble.innerHTML = formatAssistantText(fullText);
+      if (metaData.sources && metaData.sources.length > 0) {
+        var sd = document.createElement('div');
+        sd.className = 'message-sources';
+        sd.innerHTML = '📎 来源：' + metaData.sources.map(function(s) {
+          var name = s.split(/[\\/]/).pop();
+          return '<span class="source-tag">' + escapeHtml(name) + '</span>';
+        }).join('');
+        streamBubble.appendChild(sd);
+      }
+    }
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    saveConversation();
     updateChatHeader();
   } catch(e) {
     removeTypingIndicator();
-    var sb = document.getElementById('stream-bubble');
-    if (sb) sb.parentElement.remove();
-    appendMessageEl('assistant', '\u274c \u7f51\u7edc\u9519\u8bef\uff1a' + e.message, null, true);
+    appendMessageEl('assistant', '❌ 网络错误：' + e.message, null, true);
   }
 
   chatInput.disabled = false;
@@ -1316,48 +1245,26 @@ async function sendMessage() {
   chatInput.focus();
 }
 
-function createStreamingBubble() {
-  var empty = chatMessages.querySelector('.chat-empty');
-  if (empty) empty.remove();
-
-  var msg = document.createElement('div');
-  msg.className = 'message assistant streaming';
-  msg.innerHTML = '<div class="message-avatar">\ud83e\udd16</div>' +
-    '<div id="stream-bubble" class="message-bubble" style="white-space:pre-wrap;word-break:break-word;"></div>';
-  chatMessages.appendChild(msg);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-  return document.getElementById('stream-bubble');
-}
-
-function finalizeStreamBubble(bubble, text, sources, persist) {
-  if (!bubble) return;
-  var parent = bubble.parentElement;
-  if (!parent) return;
-  parent.classList.remove('streaming');
-
-  // Format the text
-  bubble.innerHTML = formatAssistantText(text);
-  bubble.removeAttribute('id');
-
-  // Add sources
-  if (sources && sources.length > 0) {
-    var sd = document.createElement('div');
-    sd.className = 'message-sources';
-    sd.innerHTML = '\ud83d\udcce \u6765\u6e90\uff1a' + sources.map(function(s) {
-      var name = s.split(/[\\\\\/]/).pop();
-      return '<span class="source-tag">' + escapeHtml(name) + '</span>';
-    }).join('');
-    bubble.appendChild(sd);
-  }
-
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-  if (persist) saveConversation();
-}
-
 // ── History Panel ───────────────────────────────────
-async function loadHistory(docId) {
+var _historyPanelDocId = null;
+
+async function toggleHistoryPanel() {
+  var panel = document.getElementById('history-panel');
+  var isOpen = panel.classList.toggle('open');
+  if (isOpen) {
+    _historyPanelDocId = selectedKbId;
+    if (_historyPanelDocId) {
+      await loadHistory(_historyPanelDocId);
+    } else {
+      document.getElementById('history-panel-body').innerHTML =
+        '<div class="empty-state"><p>📋 请先选择知识库</p></div>';
+    }
+  }
+}
+
+async function loadHistory(kbId) {
   try {
-    var resp = await fetch('/api/v1/qa/history/' + docId + '?limit=100');
+    var resp = await fetch('/api/v1/qa/history/' + kbId + '?limit=100');
     if (!resp.ok) return;
     var data = await resp.json();
     renderHistoryPanel(data.items || []);
@@ -1368,44 +1275,76 @@ function renderHistoryPanel(items) {
   var panel = document.getElementById('history-panel-body');
   if (!panel) return;
   if (!items || items.length === 0) {
-    panel.innerHTML = '<div class=\"empty-state\"><p>\u6682\u65e0\u95ee\u7b54\u8bb0\u5f55</p></div>';
+    panel.innerHTML = '<div class="empty-state" style="padding:24px 16px;"><p>📭 暂无对话记录</p><p style="font-size:11px;color:var(--text-muted);margin-top:4px;">开始提问后，对话将自动保存</p></div>';
     return;
   }
+
   var groups = {};
   for (var i = 0; i < items.length; i++) {
     var r = items[i];
     if (!groups[r.conversation_id]) groups[r.conversation_id] = [];
     groups[r.conversation_id].push(r);
   }
-  panel.innerHTML = Object.keys(groups).map(function(cid) {
+  var convIds = Object.keys(groups);
+
+  var headerHtml = '<div style="padding:8px 12px;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border);">共 ' + convIds.length + ' 个对话 · ' + items.length + ' 条消息</div>';
+
+  var listHtml = convIds.map(function(cid) {
     var conv = groups[cid];
     var firstQ = null;
     for (var j = 0; j < conv.length; j++) {
       if (conv[j].role === 'user') { firstQ = conv[j]; break; }
     }
-    var preview = firstQ ? firstQ.content.slice(0, 80) : '(\u7a7a\u5bf9\u8bdd)';
+    var preview = firstQ ? firstQ.content.slice(0, 60) : '(空对话)';
     var date = conv[0].created_at ? new Date(conv[0].created_at).toLocaleString('zh-CN') : '';
-    return '<div class=\"history-item\" onclick=\"restoreConversation(\x27' + cid + '\x27)\">' +
-      '<div class=\"history-preview\">' + escapeHtml(preview) + (preview.length >= 80 ? '...' : '') + '</div>' +
-      '<div class=\"history-meta\">' + conv.length + ' \u6761 \u00b7 ' + date + '</div>' +
+    return '<div class="history-item">' +
+      '<div class="history-item-main" onclick="restoreConversation(\'' + cid + '\')">' +
+        '<div style="font-weight:500;font-size:13px;line-height:1.4;margin-bottom:4px;">💬 ' + escapeHtml(preview) + (preview.length >= 60 ? '...' : '') + '</div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);">' +
+          '<span>📝 ' + conv.length + ' 条消息</span>' +
+          '<span>🕐 ' + date + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<button class="history-del-btn" onclick="event.stopPropagation();deleteHistoryConversation(\'' + cid + '\')" title="删除该对话历史">✕</button>' +
     '</div>';
   }).join('');
+
+  panel.innerHTML = headerHtml + listHtml;
 }
 
 async function restoreConversation(convId) {
-  if (!selectedDocId) return;
+  if (!_historyPanelDocId) return;
   conversationId = convId;
   chatMessages.innerHTML = '';
   try {
-    var resp = await fetch('/api/v1/qa/history/' + selectedDocId + '?conversation_id=' + convId + '&limit=100');
-    if (!resp.ok) return;
+    var resp = await fetch('/api/v1/qa/history/' + _historyPanelDocId + '?conversation_id=' + convId + '&limit=100');
+    if (!resp.ok) { console.error('restoreConversation: HTTP', resp.status); return; }
     var data = await resp.json();
-    for (var i = 0; i < data.items.length; i++) {
-      appendMessageEl(data.items[i].role, data.items[i].content, null, false);
+    var items = data.items || [];
+    for (var i = 0; i < items.length; i++) {
+      var sources = items[i].sources;
+      if (typeof sources === 'string') {
+        try { sources = JSON.parse(sources); } catch(e) { sources = []; }
+      }
+      appendMessageEl(items[i].role, items[i].content, sources, false);
     }
     updateChatHeader();
-    showToast('\u5386\u53f2\u5bf9\u8bdd\u5df2\u6062\u590d', 'info');
+    saveConversation();
+    toggleHistoryPanel();
+    if (items.length > 0) showToast('已恢复 ' + items.length + ' 条消息', 'info');
   } catch(e) { console.error('restoreConversation:', e); }
+}
+
+async function deleteHistoryConversation(convId) {
+  if (!confirm('确定要删除该对话历史吗？此操作不可恢复。')) return;
+  try {
+    var resp = await fetch('/api/v1/qa/conversation/' + encodeURIComponent(convId), { method: 'DELETE' });
+    if (!resp.ok) { showToast('删除失败', 'error'); return; }
+    var data = await resp.json();
+    showToast('已删除 ' + (data.deleted_records || 0) + ' 条记录', 'info');
+    if (conversationId === convId) clearChat();
+    if (_historyPanelDocId) await loadHistory(_historyPanelDocId);
+  } catch(e) { console.error('deleteHistoryConversation:', e); showToast('删除失败', 'error'); }
 }
 
 // ── Document Preview ────────────────────────────────
@@ -1435,12 +1374,26 @@ async function previewDocument(docId) {
     var doc = await docResp.json();
     document.getElementById('preview-title').textContent = doc.filename;
 
-    if (doc.file_type === '.txt' || doc.file_type === '.md') {
+    if (doc.file_type === '.md') {
+      var textResp = await fetch('/api/v1/documents/' + docId + '/content');
+      if (textResp.ok) {
+        var text = await textResp.text();
+        if (typeof marked !== 'undefined') {
+          marked.setOptions({ breaks: true, gfm: true });
+          document.getElementById('preview-content').innerHTML =
+            '<div class="markdown-preview">' + marked.parse(text.slice(0, 50000)) + '</div>';
+        } else {
+          document.getElementById('preview-content').innerHTML =
+            '<pre style="white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.7;padding:16px;">' +
+            escapeHtml(text.slice(0, 30000)) + '</pre>';
+        }
+      }
+    } else if (doc.file_type === '.txt') {
       var textResp = await fetch('/api/v1/documents/' + docId + '/content');
       if (textResp.ok) {
         var text = await textResp.text();
         document.getElementById('preview-content').innerHTML =
-          '<pre style=\"white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.7;\">' +
+          '<pre style="white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.7;padding:16px;">' +
           escapeHtml(text.slice(0, 30000)) + '</pre>';
       }
     } else if (doc.file_type === '.csv') {
@@ -1471,25 +1424,6 @@ async function previewDocument(docId) {
 }
 
 // ── Dark Mode ───────────────────────────────────────
-function initTheme() {
-  var saved = 'dark';
-  try { saved = localStorage.getItem('smartdocqa_theme') || 'dark'; } catch(e) {}
-  applyTheme(saved);
-}
-
-function toggleTheme() {
-  var cur = document.documentElement.getAttribute('data-theme') || 'dark';
-  var next = cur === 'dark' ? 'light' : 'dark';
-  applyTheme(next);
-  try { localStorage.setItem('smartdocqa_theme', next); } catch(e) {}
-}
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  var btn = document.getElementById('theme-toggle-btn');
-  if (btn) btn.textContent = theme === 'dark' ? '\u2600\ufe0f' : '\ud83c\udf19';
-}
-
-// ── Init ────────────────────────────────────────────
 initTheme();
 refreshDocs();
+refreshKBs();

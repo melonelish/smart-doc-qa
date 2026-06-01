@@ -43,6 +43,7 @@ class Settings(BaseSettings):
         return (
             f"mysql+pymysql://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
+            f"?charset=utf8mb4"
         )
 
     @property
@@ -50,6 +51,7 @@ class Settings(BaseSettings):
         return (
             f"mysql+pymysql://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}"
+            f"?charset=utf8mb4"
         )
 
     @property

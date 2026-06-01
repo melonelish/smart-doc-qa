@@ -1,183 +1,70 @@
 # 更新日志
 
+## [v2.1] - 2026-06-01
+
+### 🐛 Bug 修复
+
+#### 后端
+- **流式对话数据库保存**：`ask_question_stream` 缺少 `db` 参数，SSE 对话从未写入数据库 → 添加 `db: Session = Depends(get_db)` + 调用 `_save_turn`
+- **对话历史排序**：相同时间戳下 user/assistant 顺序不稳定 → 添加 `case(role=="user", 0)` 二级排序
+- **对话删除端点**：`DELETE /conversation/{id}` 仅清内存不清数据库 → 添加 DB 记录删除 + 返回 `deleted_records` 数量
+- **数据库编码**：`database_url` 缺少 `?charset=utf8mb4`，中文存储乱码
+- **文档预览编码**：`/content` 端点返回 JSON 而非纯文本 → 改用 `PlainTextResponse`
+
+#### 前端
+- **文档模式发消息**：`sendMessage` 硬编码 `if (!selectedKbId) return`，文档模式无法问答 → 支持 doc/KB 双模式
+- **对话历史恢复**：`restoreConversation` 硬编码 `selectedDocId`，KB 模式下为 null 导致退出 → 使用 `_historyPanelDocId`
+- **历史面板打开**：`toggleHistoryPanel` 只取 `selectedKbId`，文档模式下历史面板为空 → `selectedDocId || selectedKbId`
+- **KB 下拉框大小写**：HTML `toggleKBDropdown` vs JS `toggleKbDropdown` → 统一小写
+- **历史按钮事件**：按钮用 `classList.toggle('open')` 而非调用 `toggleHistoryPanel()` → 修正为函数调用
+- **重复函数**：`sendMessage` 定义 2 次（第二个覆盖第一个）、`initTheme/toggleTheme/applyTheme` 各重复 1 次 → 删除旧版
+
+### ✨ 改进
+
+- **缓存禁用**：新增 `NoCacheStaticMiddleware` ASGI 中间件，`/static/*` 路径强制 `no-cache, no-store, must-revalidate`
+- **HTML meta 标签**：添加 `<meta http-equiv="Cache-Control">` 禁止浏览器缓存
+- **对话历史 sources 解析**：`_parse_sources` 正确提取 source 字段，返回字符串列表而非原始 JSON
+- **删除记录端点**：新增 `DELETE /history/{record_id}` 支持单条记录删除
+
+### 🔧 技术债务
+
+- 清理重复函数声明，JS 代码行数从 1612 优化至 ~1400 行
+- 统一 `_save_turn` 命名（原 `_save_conversation_turn`）
+- 移除冗余 `from app.models.document import ConversationRecord` 导入
+
+---
+
 ## [v2.0] - 2026-06-01
 
-### 🚀 知识库功能（合并 #18 + #21）
+### 🚀 知识库功能
+- 知识库 CRUD（创建/列表/详情/更新/删除）
+- 文档关联（批量绑定/解绑/直接上传）
+- 跨文档问答（FAISS 混合检索 + BM25 + 重排序）
+- 前端 KB 管理界面（卡片/创建弹窗/上传/删除）
+- KB 模式 SSE 流式问答 + 引用溯源
 
-#### 1. 知识库数据模型
-- 新增 `KnowledgeBase` 表：id, name, description, created_at, updated_at
-- 新增 `KnowledgeBaseDocument` 中间表：多对多关联，一个文档可属于多个知识库
-- Alembic 迁移 `61f7ee5bed9c`：自动创建两张新表
+---
 
-#### 2. 知识库 CRUD API (`/api/v1/knowledge-bases`)
-- `GET /` - 列表（含文档数量）
-- `POST /` - 创建
-- `GET /{kb_id}` - 详情（含文档列表）
-- `PUT /{kb_id}` - 更新名称/描述
-- `DELETE /{kb_id}` - 删除（级联关联+向量库）
+## [v1.3] - 2026-05-30
 
-#### 3. 文档关联 API
-- `POST /{kb_id}/documents` - 批量绑定文档（自动重建索引）
-- `DELETE /{kb_id}/documents/{doc_id}` - 解绑文档
-- `POST /{kb_id}/upload` - 直接上传文件到知识库
-- `POST /{kb_id}/rebuild-index` - 手动重建 FAISS 索引
+### ✨ UI 改进
+- Dark/Light 主题切换
+- 对话历史面板（滑入式）
+- 文档预览弹窗（Markdown/CSV/Text 渲染）
 
-#### 4. 跨文档问答
-- `QAService.ask_question_by_kb()` - 基于知识库的多文档混合检索
-- 问答接口 `POST /api/v1/qa/ask` 新增 `kb_id` 字段（与 `document_id` 二选一）
-- SSE 流式接口 `POST /api/v1/qa/ask-stream` 同步支持
-- 检索时自动加载知识库全部已处理文档的 FAISS 索引
-- 来源溯源标注具体文档名 + 片段位置
-
-#### 5. 前端知识库 UI
-- 左侧新增 Knowledge Bases 卡片（＋ 新建按钮、KB 列表）
-- 选择 KB 后自动切换到跨文档问答模式
-- KB 模式下上传文件直接进入该 KB
-- KB 创建弹窗（名称+描述）
-- KB 删除确认
-- 暗色/亮色主题适配
-
-### 后端新增文件
-- `app/models/document.py` - 新增 KnowledgeBase + KnowledgeBaseDocument 模型
-- `app/services/knowledge_base_service.py` - 知识库业务逻辑
-- `app/api/knowledge_bases.py` - 知识库 API 路由
-
-### 后端修改文件
-- `app/services/qa_service.py` - 新增 `ask_question_by_kb()` 方法
-- `app/api/qa.py` - QuestionRequest 新增 `kb_id`；ask/ask-stream 路由分发
-- `app/main.py` - 注册 knowledge_bases router
-
-### 前端修改文件
-- `app/static/index.html` - 新增 KB 卡片 + KB 创建弹窗
-- `app/static/js/app.js` - KB 状态管理、CRUD 操作、上传路由
-- `app/static/css/style.css` - KB 列表 + 弹窗样式
+### 🔧 后端
+- `/content` 端点返回原始文件内容
+- `/ask-stream` SSE 流式问答
+- `/history` 对话历史列表
 
 ---
 
 ## [v1.1] - 2026-05-29
 
-### 🚀 六项核心改进
-
-#### 1. 语义嵌入模型（替代 TF-IDF）
-- 引入 `BAAI/bge-small-zh-v1.5` 中文语义嵌入模型（768 维向量）
-- 首次运行自动从 HuggingFace 下载（~100MB），后续本地缓存
-- 支持国内镜像加速（`HF_ENDPOINT=https://hf-mirror.com`）
-- 替换原有 `scikit-learn TF-IDF` 稀疏向量为稠密语义向量
-
-#### 2. 混合检索（向量 + BM25）
-- FAISS 向量检索 + BM25 关键词检索双路召回
-- Reciprocal Rank Fusion (RRF) 融合两路排序结果
-- BM25 使用 `jieba` 中文分词，适配中文场景
-- 可通过 `use_hybrid` 参数开关（默认开启）
-
-#### 3. Cross-Encoder 重排序
-- 引入 `BAAI/bge-reranker-base` 交叉编码器
-- 对混合检索结果二次排序，提升 Top-K 精度
-- 可通过 `use_rerank` 参数开关（默认开启）
-- 模型首次运行自动下载（~1GB）
-
-#### 4. 多轮对话支持
-- `ConversationMemory` 类管理对话历史（内存存储 + TTL 自动过期）
-- `conversation_id` 标识对话上下文，支持追问
-- 自动将历史对话注入 LLM Prompt，实现上下文连贯
-- 对话有效期可配置（默认 3600 秒）
-- 新增 `DELETE /api/v1/qa/conversation/{id}` 清除对话接口
-
-#### 5. Prompt 工程优化
-- 结构化 System Prompt：角色定义 → 回答规则 → 引用格式 → 思考链 → 示例
-- 要求 LLM 先给出结论，再附依据和引用
-- 答案格式：`**结论**` + `**依据**` + `[来源: xxx]`
-- 限制最大输出 2048 token，避免冗长
-
-#### 6. 引用溯源
-- 答案自动标注来源文档和段落
-- 新增 `source_details` 字段，包含：
-  - `source`：来源文档名
-  - `chunks[].chunk_index`：文档块序号
-  - `chunks[].snippet`：原文片段
-- 新增 `retrieval_method` 字段（`"hybrid"` / `"vector_only"`）
-
----
-
-### 📁 变更文件清单
-
-| 文件 | 变更类型 | 说明 |
-|------|---------|------|
-| `app/services/qa_service.py` | 重写 | 641 行新增/重构：语义嵌入、混合检索、重排序、多轮对话、Prompt、溯源 |
-| `app/api/qa.py` | 增强 | 新增请求字段（conversation_id, use_hybrid, use_rerank, top_k）；新增 source_details 响应模型 |
-| `app/core/config.py` | 新增 | `hf_endpoint` 配置项（国内 HuggingFace 镜像） |
-| `requirements.txt` | 新增 | `langchain-huggingface`, `rank-bm25`, `jieba`, `sentence-transformers`, `numpy<2.0` |
-| `.env` | 新增 | `HF_ENDPOINT`, `LOCAL_EMBEDDING_MODEL`, `RERANKER_MODEL`, `CONVERSATION_TTL_SECONDS` |
-| `.env.example` | 更新 | 同步新增配置项及中文注释 |
-
----
-
-### 🐛 Bug 修复
-
-- **numpy ABI 崩溃**：`sentence-transformers` 安装时拉高 `numpy` 至 2.x，与 `pandas`/`sklearn` C 扩展不兼容导致 `SystemError`。锁定 `numpy>=1.26.0,<2.0.0`，同步降级 `scipy<1.14`、`sklearn<1.6`、`pandas<2.3`
-- **HuggingFace 下载超时**：国内直连 `huggingface.co` 超时，新增 `HF_ENDPOINT` 环境变量支持国内镜像
-- **LangChain 弃用警告**：`HuggingFaceEmbeddings` 从 `langchain_community` 迁移至 `langchain_huggingface`
-
----
-
-### 🏗️ 环境依赖版本
-
-| 包 | 版本 |
-|---|------|
-| Python | 3.10.20 |
-| numpy | 1.26.4 |
-| scipy | 1.13.1 |
-| scikit-learn | 1.5.2 |
-| pandas | 2.2.3 |
-| sentence-transformers | 5.5.1 |
-| faiss-cpu | 1.14.2 |
-| langchain | 0.3.x |
-| langchain-huggingface | 0.1.x |
-| rank-bm25 | 0.2.x |
-| jieba | 0.42.1 |
-
----
-
-### 📡 API 变更
-
-**POST `/api/v1/qa/ask` 请求新增字段：**
-```json
-{
-  "conversation_id": "",       // 对话ID，空=新对话
-  "top_k": 4,                  // 检索数量 (1-20)
-  "use_hybrid": true,          // 启用混合检索
-  "use_rerank": true           // 启用重排序
-}
-```
-
-**POST `/api/v1/qa/ask` 响应新增字段：**
-```json
-{
-  "conversation_id": "uuid",   // 对话ID（多轮追问用）
-  "source_details": [          // 引用溯源详情
-    {
-      "source": "doc.txt",
-      "chunks": [
-        { "chunk_index": 1, "page": "", "snippet": "原文片段..." }
-      ]
-    }
-  ],
-  "retrieval_method": "hybrid" // 检索方式
-}
-```
-
-**新增接口：**
-- `DELETE /api/v1/qa/conversation/{conversation_id}` — 清除对话历史
-
----
-
-## [v1.0] - 2026-05-28
-
-### 🎉 初始版本
-
-- FastAPI + LangChain + FAISS + MySQL 架构搭建
-- 文档上传、处理、问答基础功能
-- TF-IDF 向量化 + FAISS 索引
-- OpenAI / DeepSeek LLM 集成
-- MySQL 文档元数据管理
-- Swagger API 文档
+### 🔍 检索问答 6 项核心改进
+1. 语义嵌入（BAAI/bge-small-zh-v1.5）
+2. 混合检索（FAISS + BM25 RRF 融合）
+3. 重排序（BAAI/bge-reranker-base Cross-Encoder）
+4. 多轮对话（ConversationMemory + TTL）
+5. Prompt 工程（结构化 System Prompt）
+6. 引用溯源（source_details + chunk_index）

@@ -117,22 +117,24 @@ async def list_documents(
 
 @router.get("/{doc_id}/content")
 async def get_document_content(doc_id: str, db: Session = Depends(get_db)):
-    """Return the raw file content for preview."""
+    """Return the raw file content for preview (text/plain, not JSON)."""
     from app.exceptions import DocumentNotFoundError
     doc = DocumentService.get_document(db, doc_id)
     if not doc:
         raise DocumentNotFoundError(doc_id)
     try:
         with open(doc.file_path, "r", encoding="utf-8") as f:
-            return f.read()
+            content = f.read()
     except UnicodeDecodeError:
         try:
             with open(doc.file_path, "r", encoding="gbk") as f:
-                return f.read()
+                content = f.read()
         except Exception:
             raise HTTPException(status_code=415, detail="Unable to decode file content for preview")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found on disk")
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(content=content)
 
 
 @router.get("/{doc_id}")

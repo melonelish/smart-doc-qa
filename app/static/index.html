@@ -3,9 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>SmartDocQA - 智能文档问答助手</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=2.0">
+  <link rel="stylesheet" href="/static/css/style.css?v=2.8">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" async></script>
 </head>
 <body>
   <div id="toast-container" class="toast-container"></div>
@@ -46,7 +50,7 @@
         <div class="history-panel" id="history-panel">
           <div class="history-panel-header">
             <h3>📜 问答历史</h3>
-            <button class="btn-icon" onclick="document.getElementById('history-panel').classList.remove('open')">✕</button>
+            <button class="btn-icon" onclick="toggleHistoryPanel()">✕</button>
           </div>
           <div class="history-panel-body" id="history-panel-body">
             <div class="empty-state"><p>暂无问答记录</p></div>
@@ -95,30 +99,12 @@
       <div class="content-area">
         <!-- Left Column -->
         <div class="column-left" id="column-left">
-          <!-- Upload Card -->
-          <div class="card" id="upload-card">
-            <div class="card-header">
-              <span class="card-title"><span class="icon">📤</span> 上传文档</span>
-              <span class="card-badge">PDF / TXT / CSV / MD</span>
-            </div>
-            <div class="upload-zone" id="upload-zone">
-              <div class="upload-icon">☁️</div>
-              <div class="upload-text">拖拽文件到此处或点击上传</div>
-              <div class="upload-hint">支持 PDF、TXT、Markdown、CSV · 最大 10MB</div>
-              <input type="file" id="file-input" accept=".pdf,.txt,.md,.csv">
-            </div>
-            <div class="upload-progress" id="upload-progress">
-              <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                <span id="upload-filename" style="font-size:12px;color:var(--text-secondary);"></span>
-                <span id="upload-percent" style="font-size:12px;color:var(--accent-light);">0%</span>
-              </div>
-              <div class="progress-bar">
-                <div class="progress-fill" id="progress-fill" style="width:0%"></div>
-              </div>
-            </div>
-          </div>
 
-          <!-- Knowledge Base Card -->
+
+                    <!-- Hidden Upload -->
+          <input type="file" id="file-input" accept=".pdf,.txt,.md,.csv" style="display:none;">
+
+          <!-- Knowledge Base Section -->
           <div class="card" style="margin-bottom:12px;">
             <div class="card-header">
               <span class="card-title"><span class="icon">📚</span> Knowledge Bases</span>
@@ -127,17 +113,34 @@
                 <span id="kb-count-badge" class="badge badge-primary">0</span>
               </div>
             </div>
-            <div id="kb-list" class="kb-list">
+            <!-- KB Selector Dropdown -->
+            <div class="kb-selector" id="kb-selector">
+              <button class="kb-selector-btn" onclick="toggleKbDropdown(event)">
+                <span class="kb-selector-label" id="kb-selector-label">全部文档</span>
+                <span class="kb-selector-arrow">▾</span>
+              </button>
+              <div class="kb-dropdown" id="kb-dropdown">
+                <div class="kb-dropdown-item active" data-kb-id="" onclick="selectKB('', '全部文档')">
+                  📄 全部文档 <span id="kb-dd-total-count" style="margin-left:auto;font-size:11px;opacity:0.5;">0</span>
+                </div>
+                <div id="kb-dropdown-kbs"></div>
+              </div>
+            </div>
+            <div id="kb-list" class="kb-list" style="display:none;">
               <div class="empty-state" style="padding:8px;font-size:12px;text-align:center;opacity:0.6;">暂无知识库</div>
             </div>
           </div>
 
           <!-- Document List Card -->
-          <!-- Document List Card -->
-          <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+          <div class="card" id="doc-card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
             <div class="card-header">
-              <span class="card-title"><span class="icon">📋</span> 我的文档</span>
-              <button class="btn btn-secondary btn-sm" onclick="refreshDocs()">🔄 刷新</button>
+              <span class="card-title"><span class="icon">📋</span> 我的文档 <span id="doc-count-inline" style="font-size:12px;opacity:0.5;margin-left:4px;"></span></span>
+              <div style="display:flex;gap:6px;">
+                <button class="btn btn-secondary btn-sm" onclick="refreshDocs()">🔄 刷新</button>
+                <button class="btn btn-primary btn-sm" id="btn-upload" onclick="triggerUpload()">
+                  <span class="btn-upload-text">上传</span>
+                </button>
+              </div>
             </div>
             <div class="doc-list" id="doc-list">
               <div class="empty-state">
@@ -157,7 +160,7 @@
                 <p id="chat-doc-status">请先在左侧选择一个已处理的文档</p>
               </div>
               <button class="btn btn-secondary btn-sm" onclick="clearChat()">🗑️ 清空对话</button>
-              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('history-panel').classList.toggle('open')" title="问答历史">📜</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleHistoryPanel()" title="问答历史">📜 对话历史</button>
             </div>
             <div class="chat-messages" id="chat-messages">
               <div class="chat-empty">
@@ -182,6 +185,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=2.0"></script>
+  <script src="/static/js/app.js?v=3.2"></script>
 </body>
 </html>
