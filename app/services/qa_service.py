@@ -721,3 +721,148 @@ class QAService:
             "source_count": len(final_docs),
             "retrieval_method": retrieve_method,
         }
+
+    # ------- Knowledge Base Q&A ----------------------------------
+
+    def ask_question_by_kb(
+        self,
+        kb_id: str,
+        question: str,
+        conversation_id: str = "",
+        top_k: int = 4,
+        use_hybrid: bool = True,
+        use_rerank: bool = True,
+    ) -> dict:
+        """Retrieve from a knowledge base (multi-document FAISS index)."""
+        kb_store_name = f"kb_{kb_id}"
+        vector_store = self.load_vector_store(kb_store_name)
+        if vector_store is None:
+            # Fallback: try to rebuild on the fly
+            from app.db.database import SessionLocal
+            from app.services.knowledge_base_service import KnowledgeBaseService
+            db = SessionLocal()
+            try:
+                KnowledgeBaseService.rebuild_kb_index(db, kb_id)
+            finally:
+                db.close()
+            vector_store = self.load_vector_store(kb_store_name)
+            if vector_store is None:
+                raise ValueError(f"Knowledge base index not found: {kb_id}")
+
+        candidates = None
+        actual_hybrid = use_hybrid
+        if use_hybrid:
+            all_chunks = self._load_chunks(kb_store_name)
+            if all_chunks:
+                bm25 = BM25Retriever(all_chunks)
+                bm25_results = bm25.search(question, k=top_k * 5)
+            else:
+                bm25_results = []
+            faiss_results = vector_store.similarity_search_with_score(
+                question, k=top_k * 5
+            )
+            candidates = _rrf_fusion(faiss_results, bm25_results, k=60)
+        if candidates is None:
+            candidates = vector_store.similarity_search_with_score(
+                question, k=top_k * 5
+            )
+
+        if not candidates:
+            raise ValueError("No relevant document passages found")
+
+        if use_rerank and len(candidates) > top_k:
+            pool = candidates[: min(top_k * 3, len(candidates))]
+            final_docs = _rerank(question, pool, top_k=top_k)
+        else:
+            final_docs = [doc for doc, _ in candidates[:top_k]]
+
+        context_parts = []
+        source_details = __import__('collections').OrderedDict()
+
+        for i, doc in enumerate(final_docs):
+            source = doc.metadata.get("source", "Unknown")
+            page = doc.metadata.get("page", "")
+            chunk_idx = doc.metadata.get("chunk", i)
+            doc_name = doc.metadata.get("document_name", source)
+
+            label = f"[Fragment {i + 1}]  Source: {doc_name}"
+            if page:
+                label += f" (Page {page})"
+            context_parts.append(f"{label}\n{doc.page_content}")
+
+            if doc_name not in source_details:
+                source_details[doc_name] = []
+            source_details[doc_name].append({
+                "chunk_index": i + 1,
+                "page": page,
+                "snippet": (
+                    doc.page_content[:200] + "..."
+                    if len(doc.page_content) > 200
+                    else doc.page_content
+                ),
+            })
+
+        sep = "\n\n" + "=" * 60 + "\n\n"
+        context = sep.join(context_parts)
+        context = "\n\n" + context + "\n\n" + "=" * 60
+
+        history_text = ""
+        if conversation_id:
+            history = conversation_memory.get_history(conversation_id, max_turns=6)
+            if history:
+                history_parts = []
+                for turn in history:
+                    role_label = "User" if turn.role == "user" else "Assistant"
+                    history_parts.append(f"{role_label}: {turn.content}")
+                history_text = (
+                    "## Conversation History\n\n"
+                    + "\n\n".join(history_parts)
+                    + "\n\n" + "=" * 60 + "\n\n"
+                )
+
+        user_message = (
+            f"{history_text}"
+            f"## Document Fragments (total {len(final_docs)})\n"
+            f"{context}\n\n"
+            f"## Current Question\n\n"
+            f"{question}"
+        )
+
+        answer = self.llm_chat(SYSTEM_PROMPT, user_message)
+        answer = self._format_answer(answer)
+
+        convo_id = conversation_id or str(uuid.uuid4())
+        conversation_memory.add_turn(
+            convo_id,
+            ConversationTurn(role="user", content=question),
+        )
+        conversation_memory.add_turn(
+            convo_id,
+            ConversationTurn(
+                role="assistant",
+                content=answer,
+                sources=[s for s in source_details],
+            ),
+        )
+
+        retrieve_method = (
+            "hybrid + rerank" if use_hybrid and use_rerank
+            else "hybrid" if use_hybrid
+            else "vector + rerank" if use_rerank
+            else "vector"
+        )
+
+        return {
+            "question": question,
+            "conversation_id": convo_id,
+            "answer": answer,
+            "sources": list(source_details.keys()),
+            "source_details": [
+                {"source": s, "chunks": d}
+                for s, d in source_details.items()
+            ],
+            "source_count": len(final_docs),
+            "retrieval_method": retrieve_method,
+            "kb_id": kb_id,
+        }
+

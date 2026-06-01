@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from app.core.config import get_settings
 from app.db.database import engine, SessionLocal, Base
 from app.exceptions import AppException
-from app.api import documents, qa
+from app.api import documents, qa, knowledge_bases
 from app.services.progress_ws import progress_tracker
 
 settings = get_settings()
@@ -73,6 +73,7 @@ def create_app() -> FastAPI:
 
     app.include_router(documents.router)
     app.include_router(qa.router)
+    app.include_router(knowledge_bases.router)
 
     # ── Global exception handlers ───────────────────────
 

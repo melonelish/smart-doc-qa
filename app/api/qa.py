@@ -44,7 +44,8 @@ def _save_conversation_turn(
 
 
 class QuestionRequest(BaseModel):
-    document_id: str = Field(..., description="文档ID")
+    document_id: str = Field(default="", description="文档ID（与kb_id二选一）")
+    kb_id: str = Field(default="", description="知识库ID（与document_id二选一）")
     question: str = Field(
         ..., min_length=1, max_length=2000, description="问题内容"
     )
@@ -91,7 +92,17 @@ async def ask_question(
 ):
     try:
         qa = QAService()
-        result = qa.ask_question(
+        if request.kb_id:
+            result = qa.ask_question_by_kb(
+                kb_id=request.kb_id,
+                question=request.question,
+                conversation_id=request.conversation_id,
+                top_k=request.top_k,
+                use_hybrid=request.use_hybrid,
+                use_rerank=request.use_rerank,
+            )
+        else:
+            result = qa.ask_question(
             vector_store_name=request.document_id,
             question=request.question,
             conversation_id=request.conversation_id,
@@ -101,12 +112,12 @@ async def ask_question(
         )
         # Persist to DB
         _save_conversation_turn(
-            db, request.document_id, result["conversation_id"],
+            db, request.kb_id or request.document_id, result["conversation_id"],
             "user", request.question,
             sources=None,
         )
         _save_conversation_turn(
-            db, request.document_id, result["conversation_id"],
+            db, request.kb_id or request.document_id, result["conversation_id"],
             "assistant", result["answer"],
             sources=json.dumps(result.get("source_details", []), ensure_ascii=False),
         )
@@ -124,7 +135,17 @@ async def ask_question_stream(request: QuestionRequest):
     """SSE 流式问答 —— 答案逐字返回，消除长回答等待焦虑。"""
     try:
         qa = QAService()
-        result = qa.ask_question(
+        if request.kb_id:
+            result = qa.ask_question_by_kb(
+                kb_id=request.kb_id,
+                question=request.question,
+                conversation_id=request.conversation_id,
+                top_k=request.top_k,
+                use_hybrid=request.use_hybrid,
+                use_rerank=request.use_rerank,
+            )
+        else:
+            result = qa.ask_question(
             vector_store_name=request.document_id,
             question=request.question,
             conversation_id=request.conversation_id,

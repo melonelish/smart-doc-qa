@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SmartDocQA - 智能文档问答助手</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=1.3">
+  <link rel="stylesheet" href="/static/css/style.css?v=2.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
 </head>
 <body>
@@ -118,6 +118,21 @@
             </div>
           </div>
 
+          <!-- Knowledge Base Card -->
+          <div class="card" style="margin-bottom:12px;">
+            <div class="card-header">
+              <span class="card-title"><span class="icon">📚</span> Knowledge Bases</span>
+              <div style="display:flex;gap:6px;">
+                <button class="btn btn-primary btn-sm" onclick="showCreateKBModal()">＋ 新建</button>
+                <span id="kb-count-badge" class="badge badge-primary">0</span>
+              </div>
+            </div>
+            <div id="kb-list" class="kb-list">
+              <div class="empty-state" style="padding:8px;font-size:12px;text-align:center;opacity:0.6;">暂无知识库</div>
+            </div>
+          </div>
+
+          <!-- Document List Card -->
           <!-- Document List Card -->
           <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
             <div class="card-header">
@@ -167,6 +182,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=1.3"></script>
+  <script src="/static/js/app.js?v=2.0"></script>
 </body>
 </html>

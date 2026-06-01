@@ -1,5 +1,59 @@
 # 更新日志
 
+## [v2.0] - 2026-06-01
+
+### 🚀 知识库功能（合并 #18 + #21）
+
+#### 1. 知识库数据模型
+- 新增 `KnowledgeBase` 表：id, name, description, created_at, updated_at
+- 新增 `KnowledgeBaseDocument` 中间表：多对多关联，一个文档可属于多个知识库
+- Alembic 迁移 `61f7ee5bed9c`：自动创建两张新表
+
+#### 2. 知识库 CRUD API (`/api/v1/knowledge-bases`)
+- `GET /` - 列表（含文档数量）
+- `POST /` - 创建
+- `GET /{kb_id}` - 详情（含文档列表）
+- `PUT /{kb_id}` - 更新名称/描述
+- `DELETE /{kb_id}` - 删除（级联关联+向量库）
+
+#### 3. 文档关联 API
+- `POST /{kb_id}/documents` - 批量绑定文档（自动重建索引）
+- `DELETE /{kb_id}/documents/{doc_id}` - 解绑文档
+- `POST /{kb_id}/upload` - 直接上传文件到知识库
+- `POST /{kb_id}/rebuild-index` - 手动重建 FAISS 索引
+
+#### 4. 跨文档问答
+- `QAService.ask_question_by_kb()` - 基于知识库的多文档混合检索
+- 问答接口 `POST /api/v1/qa/ask` 新增 `kb_id` 字段（与 `document_id` 二选一）
+- SSE 流式接口 `POST /api/v1/qa/ask-stream` 同步支持
+- 检索时自动加载知识库全部已处理文档的 FAISS 索引
+- 来源溯源标注具体文档名 + 片段位置
+
+#### 5. 前端知识库 UI
+- 左侧新增 Knowledge Bases 卡片（＋ 新建按钮、KB 列表）
+- 选择 KB 后自动切换到跨文档问答模式
+- KB 模式下上传文件直接进入该 KB
+- KB 创建弹窗（名称+描述）
+- KB 删除确认
+- 暗色/亮色主题适配
+
+### 后端新增文件
+- `app/models/document.py` - 新增 KnowledgeBase + KnowledgeBaseDocument 模型
+- `app/services/knowledge_base_service.py` - 知识库业务逻辑
+- `app/api/knowledge_bases.py` - 知识库 API 路由
+
+### 后端修改文件
+- `app/services/qa_service.py` - 新增 `ask_question_by_kb()` 方法
+- `app/api/qa.py` - QuestionRequest 新增 `kb_id`；ask/ask-stream 路由分发
+- `app/main.py` - 注册 knowledge_bases router
+
+### 前端修改文件
+- `app/static/index.html` - 新增 KB 卡片 + KB 创建弹窗
+- `app/static/js/app.js` - KB 状态管理、CRUD 操作、上传路由
+- `app/static/css/style.css` - KB 列表 + 弹窗样式
+
+---
+
 ## [v1.1] - 2026-05-29
 
 ### 🚀 六项核心改进

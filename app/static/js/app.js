@@ -2,6 +2,8 @@
 let selectedDocId = null;
 let selectedDocName = null;
 let selectedDocReady = false;
+let selectedKbId = null;
+let selectedKbName = null;
 let conversationId = null;
 
 const API_BASE = '';
@@ -89,6 +91,8 @@ const uploadFilename = document.getElementById('upload-filename');
 const uploadPercent = document.getElementById('upload-percent');
 const chatDocName = document.getElementById('chat-doc-name');
 const chatDocStatus = document.getElementById('chat-doc-status');
+const kbList = document.getElementById('kb-list');
+const kbBadge = document.getElementById('kb-count-badge');
 
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -299,6 +303,11 @@ fileInput.addEventListener('change', () => {
 });
 
 async function uploadFile(file) {
+  // If KB is selected, upload directly to KB
+  if (selectedKbId) {
+    uploadToKB(file);
+    return;
+  }
   const maxSize = 10 * 1024 * 1024;
   const allowed = ['.pdf', '.txt', '.md', '.csv', '.docx'];
 
@@ -470,6 +479,201 @@ async function deleteDocument(docId) {
 /* ============================================
    Document List
    ============================================ */
+
+/* ============================================
+   Knowledge Base List
+   ============================================ */
+async function refreshKBs() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/knowledge-bases/?limit=50`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderKBList(data.items);
+    if (kbBadge) kbBadge.textContent = `${data.items.length} KB`;
+  } catch (e) {
+    console.error('Failed to load KBs:', e);
+  }
+}
+
+function renderKBList(items) {
+  if (!kbList) return;
+  if (!items || items.length === 0) {
+    kbList.innerHTML = '<div class="empty-state" style="padding:12px;font-size:12px;text-align:center;color:var(--text-muted)">No KB yet - create one</div>';
+    return;
+  }
+  kbList.innerHTML = items.map(kb => {
+    const isActive = kb.id === selectedKbId;
+    return `
+      <div class="kb-item${isActive ? ' active' : ''}" data-kb-id="${kb.id}">
+        <div class="kb-item-info" onclick="selectKB('${kb.id}', '${escapeHtml(kb.name)}')">
+          <span class="kb-icon">📚</span>
+          <span class="kb-name">${escapeHtml(kb.name)}</span>
+          <span class="kb-count">${kb.document_count}</span>
+        </div>
+        <button class="btn-icon danger" title="Delete KB" onclick="event.stopPropagation();deleteKB('${kb.id}')">×</button>
+      </div>`;
+  }).join('');
+}
+
+function selectKB(kbId, kbName) {
+  if (selectedKbId === kbId) {
+    // Deselect
+    selectedKbId = null; selectedKbName = null;
+    conversationId = null;
+    updateChatHeader();
+    renderKBListFromCache();
+    return;
+  }
+  if (selectedDocId) {
+    saveConversation();
+    selectedDocId = null; selectedDocName = null; selectedDocReady = false;
+  }
+  selectedKbId = kbId;
+  selectedKbName = kbName;
+  conversationId = null;
+  updateChatHeader();
+  renderKBListFromCache();
+  clearChat();
+}
+
+function renderKBListFromCache() {
+  document.querySelectorAll('.kb-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.kbId === selectedKbId);
+  });
+  document.querySelectorAll('.doc-item').forEach(el => {
+    el.classList.toggle('selected', el.dataset.docId === selectedDocId);
+  });
+}
+
+async function deleteKB(kbId) {
+  if (!confirm('Delete this knowledge base? This cannot be undone.')) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/knowledge-bases/${kbId}`, { method: 'DELETE' });
+    if (resp.ok) {
+      if (selectedKbId === kbId) {
+        selectedKbId = null; selectedKbName = null; conversationId = null;
+        updateChatHeader();
+        clearChat();
+      }
+      showToast('Knowledge base deleted', 'info');
+    } else {
+      const err = await resp.json();
+      showToast('Delete failed: ' + (err.detail || 'error'), 'error');
+    }
+  } catch (e) {
+    showToast('Delete error: ' + e.message, 'error');
+  }
+  refreshKBs();
+}
+
+/* ============================================
+   KB Create/Edit Modal
+   ============================================ */
+function showCreateKBModal() {
+  let modal = document.getElementById('kb-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'kb-modal';
+    modal.className = 'kb-modal-overlay';
+    modal.innerHTML = `
+      <div class="kb-modal-card">
+        <h3>Create Knowledge Base</h3>
+        <input id="kb-name-input" type="text" placeholder="Knowledge Base Name" maxlength="200" />
+        <textarea id="kb-desc-input" placeholder="Description (optional)" maxlength="1000" rows="3"></textarea>
+        <div class="kb-modal-actions">
+          <button onclick="closeKBModal()">Cancel</button>
+          <button class="primary" onclick="createKB()">Create</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  document.getElementById('kb-name-input').value = '';
+  document.getElementById('kb-desc-input').value = '';
+  setTimeout(() => document.getElementById('kb-name-input').focus(), 100);
+}
+
+function closeKBModal() {
+  const modal = document.getElementById('kb-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function createKB() {
+  const name = document.getElementById('kb-name-input').value.trim();
+  const desc = document.getElementById('kb-desc-input').value.trim();
+  if (!name) { showToast('Name is required', 'error'); return; }
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/knowledge-bases/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description: desc }),
+    });
+    if (resp.ok) {
+      const kb = await resp.json();
+      showToast(`KB "${kb.name}" created`, 'success');
+      closeKBModal();
+      refreshKBs();
+    } else {
+      const err = await resp.json();
+      showToast('Create failed: ' + (err.detail || 'error'), 'error');
+    }
+  } catch (e) {
+    showToast('Create error: ' + e.message, 'error');
+  }
+}
+
+async function uploadToKB(file) {
+  if (!selectedKbId) { showToast('Select a KB first', 'warning'); return; }
+  const maxSize = 10 * 1024 * 1024;
+  const allowed = ['.pdf', '.txt', '.md', '.csv', '.docx'];
+  const ext = '.' + file.name.split('.').pop().toLowerCase();
+  if (!allowed.includes(ext)) { showToast('Unsupported file type: ' + ext, 'error'); return; }
+  if (file.size > maxSize) { showToast('File exceeds 10MB limit', 'error'); return; }
+
+  uploadProgress.classList.add('active');
+  uploadFilename.textContent = file.name;
+  uploadPercent.textContent = '0%';
+  progressFill.style.width = '0%';
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/api/v1/knowledge-bases/${selectedKbId}/upload`);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round((e.loaded / e.total) * 100);
+        progressFill.style.width = pct + '%';
+        uploadPercent.textContent = pct + '%';
+      }
+    };
+
+    xhr.onload = () => {
+      resetUploadProgress();
+      if (xhr.status === 200) {
+        const resp = JSON.parse(xhr.responseText);
+        showToast('File uploaded to KB: ' + file.name, 'success');
+        refreshKBs();
+      } else {
+        const detail = JSON.parse(xhr.responseText).detail || 'Upload failed';
+        showToast('Upload failed: ' + detail, 'error');
+      }
+    };
+
+    xhr.onerror = () => {
+      resetUploadProgress();
+      showToast('Network error', 'error');
+    };
+    xhr.send(formData);
+  } catch (e) {
+    resetUploadProgress();
+    showToast('Upload error: ' + e.message, 'error');
+  }
+}
+
+
 async function refreshDocs() {
   try {
     const resp = await fetch(`${API_BASE}/api/v1/documents/?skip=0&limit=50`);
@@ -567,9 +771,16 @@ function updateChatHeader() {
   const convIndicator = conversationId
     ? `<span class="conv-badge" title="多轮对话中">🔄</span>`
     : '';
+  if (selectedKbId) {
+    chatDocName.innerHTML = selectedKbName + convIndicator;
+    chatDocStatus.textContent = 'Knowledge Base mode - ask across all KB documents';
+    chatInput.disabled = false;
+    btnSend.disabled = false;
+    return;
+  }
   if (!selectedDocId) {
-    chatDocName.innerHTML = '选择文档开始对话';
-    chatDocStatus.textContent = '请先在左侧选择一个已处理的文档';
+    chatDocName.innerHTML = 'Select a document or KB to start';
+    chatDocStatus.textContent = 'Pick a doc or create a Knowledge Base';
     chatInput.disabled = true;
     btnSend.disabled = true;
   } else if (!selectedDocReady) {
@@ -607,7 +818,8 @@ function escapeHtml(str) {
    ============================================ */
 async function sendMessage() {
   const question = chatInput.value.trim();
-  if (!question || !selectedDocId || !selectedDocReady) return;
+  if (!question) return;
+  if (!selectedKbId && (!selectedDocId || !selectedDocReady)) return;
 
   chatInput.value = '';
   chatInput.style.height = 'auto';
@@ -621,7 +833,14 @@ async function sendMessage() {
   const streamMsg = createStreamingMessage();
   let fullAnswer = '';
 
-  const payload = {
+  const payload = selectedKbId ? {
+    kb_id: selectedKbId,
+    question: question,
+    top_k: 4,
+    conversation_id: conversationId || undefined,
+    use_hybrid: true,
+    use_rerank: true,
+  } : {
     document_id: selectedDocId,
     question: question,
     top_k: 4,
@@ -1012,7 +1231,8 @@ document.head.appendChild(answerStyle);
 // ── Send Message (replaces sendMessage) ─────────────────
 async function sendMessage() {
   var question = chatInput.value.trim();
-  if (!question || !selectedDocId || !selectedDocReady) return;
+  if (!question) return;
+  if (!selectedKbId && (!selectedDocId || !selectedDocReady)) return;
 
   chatInput.value = '';
   chatInput.style.height = 'auto';
