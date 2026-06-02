@@ -142,6 +142,47 @@ html, body {
 .nav-item.active { background: var(--accent-glow); color: var(--accent-light); }
 .nav-item .nav-icon { font-size: 18px; width: 22px; text-align: center; }
 
+/* ── Domain Navigation ── */
+.nav-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  padding: 8px 12px 4px;
+  font-weight: 600;
+}
+.domain-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition);
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+}
+.domain-item:hover { background: var(--bg-card); color: var(--text-primary); }
+.domain-item.active { background: var(--accent-glow); color: var(--accent-light); }
+.domain-item.disabled { opacity: 0.45; cursor: not-allowed; }
+.domain-item.disabled:hover { background: none; color: var(--text-secondary); }
+.domain-item .nav-icon { font-size: 18px; width: 22px; text-align: center; }
+.dev-badge {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  margin-left: auto;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+}
+
 .sidebar-footer {
   padding: 12px 16px;
   border-top: 1px solid var(--border);
@@ -1234,6 +1275,113 @@ p {
   color: var(--danger);
   background: var(--danger-bg);
 }
+
+/* ── KB Dropdown Info Layout ── */
+.kb-dd-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+.kb-dd-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Citation Markers ── */
+.cite-markers {
+  display: inline;
+  margin-left: 4px;
+}
+.cite-sup {
+  font-size: 11px;
+  color: var(--accent-light);
+  cursor: default;
+  font-weight: 600;
+}
+.source-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0;
+}
+.source-num {
+  font-size: 11px;
+  color: var(--accent-light);
+  font-weight: 600;
+  min-width: 24px;
+}
+
+/* ── Welcome Guide ── */
+.welcome-guide {
+  gap: 0 !important;
+}
+.welcome-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.8;
+}
+.welcome-title {
+  font-size: 26px;
+  font-weight: 800;
+  background: var(--gradient-2);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 4px;
+}
+.welcome-subtitle {
+  font-size: 15px;
+  color: var(--text-secondary);
+  margin-bottom: 28px;
+}
+.welcome-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 20px;
+  text-align: left;
+  width: 260px;
+}
+.welcome-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.step-number {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--gradient-1);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.welcome-formats {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+.welcome-btn {
+  font-size: 15px;
+  padding: 12px 28px;
+  margin-bottom: 12px;
+}
+.welcome-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
 .kb-dropdown-divider {
   height: 1px;
   background: var(--border);
@@ -1378,4 +1526,104 @@ p {
 }
 .kb-modal-actions button:hover {
   opacity: 0.85;
+}
+
+/* ── Domain Intro Page ── */
+.domain-intro {
+  text-align: left;
+  max-width: 580px;
+  margin: 0 auto;
+  padding: 20px 10px;
+}
+.domain-intro-header {
+  margin-bottom: 28px;
+}
+.domain-intro-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+.domain-intro-title {
+  font-size: 28px;
+  font-weight: 800;
+  background: var(--gradient-2);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 6px;
+}
+.domain-intro-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.domain-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.domain-features {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+.domain-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.domain-feature-q {
+  font-weight: 600;
+  color: var(--accent-light);
+  font-size: 13px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.domain-feature-a {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.domain-doc-types {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.domain-doc-type {
+  padding: 12px 14px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+.domain-doc-type-icon {
+  font-size: 22px;
+  margin-bottom: 6px;
+}
+.domain-doc-type-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+.domain-doc-type-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.domain-intro-footer {
+  text-align: center;
+  padding: 16px 0 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
 }

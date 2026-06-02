@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>SmartDocQA - 智能文档问答助手</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=2.8">
+  <link rel="stylesheet" href="/static/css/style.css?v=3.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" async></script>
 </head>
@@ -26,15 +26,16 @@
           </div>
         </div>
       </div>
-      <nav class="sidebar-nav">
-        <button class="nav-item active" data-view="chat">
-          <span class="nav-icon">💬</span> AI 智能问答
+      <nav class="sidebar-nav" id="domain-nav">
+        <div class="nav-section-label">领域选择</div>
+        <button class="domain-item active" data-domain="enterprise" onclick="selectDomain('enterprise')">
+          <span class="nav-icon">🏢</span> 企业助手
         </button>
-        <button class="nav-item" data-view="documents">
-          <span class="nav-icon">📁</span> 文档管理
+        <button class="domain-item disabled" data-domain="research" title="即将推出">
+          <span class="nav-icon">🔬</span> 科研助手 <span class="dev-badge">开发中</span>
         </button>
-        <button class="nav-item" data-view="upload">
-          <span class="nav-icon">📤</span> 上传文档
+        <button class="domain-item disabled" data-domain="legal" title="即将推出">
+          <span class="nav-icon">⚖️</span> 法律助手 <span class="dev-badge">开发中</span>
         </button>
       </nav>
       <div class="sidebar-footer">
@@ -87,10 +88,10 @@
 
 <!-- Top Bar -->
       <header class="top-bar">
-        <h1 id="page-title">💬 AI 智能问答</h1>
+        <h1 id="page-title">🏢 企业助手</h1>
         <div class="top-bar-right">
           <button class="btn btn-secondary btn-sm" id="theme-toggle-btn" onclick="toggleTheme()" title="切换暗色/亮色模式">☀️</button>
-          <span id="doc-count-badge" class="badge badge-primary">0 个文档</span>
+          <span id="doc-count-badge" class="badge badge-primary">请选择知识库</span>
           <span class="badge badge-success">RAG v1.0</span>
         </div>
       </header>
@@ -110,19 +111,15 @@
               <span class="card-title"><span class="icon">📚</span> Knowledge Bases</span>
               <div style="display:flex;gap:6px;">
                 <button class="btn btn-primary btn-sm" onclick="showCreateKBModal()">＋ 新建</button>
-                <span id="kb-count-badge" class="badge badge-primary">0</span>
               </div>
             </div>
             <!-- KB Selector Dropdown -->
             <div class="kb-selector" id="kb-selector">
               <button class="kb-selector-btn" onclick="toggleKbDropdown(event)">
-                <span class="kb-selector-label" id="kb-selector-label">全部文档</span>
+                <span class="kb-selector-label" id="kb-selector-label">请选择知识库</span>
                 <span class="kb-selector-arrow">▾</span>
               </button>
               <div class="kb-dropdown" id="kb-dropdown">
-                <div class="kb-dropdown-item active" data-kb-id="" onclick="selectKB('', '全部文档')">
-                  📄 全部文档 <span id="kb-dd-total-count" style="margin-left:auto;font-size:11px;opacity:0.5;">0</span>
-                </div>
                 <div id="kb-dropdown-kbs"></div>
               </div>
             </div>
@@ -156,18 +153,13 @@
           <div class="chat-container" id="chat-container">
             <div class="chat-header">
               <div class="chat-header-info">
-                <h3 id="chat-doc-name">选择文档开始对话</h3>
-                <p id="chat-doc-status">请先在左侧选择一个已处理的文档</p>
+                <h3 id="chat-doc-name">选择知识库开始对话</h3>
+                <p id="chat-doc-status">请先选择或创建一个知识库</p>
               </div>
               <button class="btn btn-secondary btn-sm" onclick="clearChat()">🗑️ 清空对话</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleHistoryPanel()" title="问答历史">📜 对话历史</button>
             </div>
             <div class="chat-messages" id="chat-messages">
-              <div class="chat-empty">
-                <div class="empty-icon">🤖</div>
-                <h3>开始智能文档问答</h3>
-                <p>上传文档并点击「处理」后，AI 将深入理解你的文档内容。你可以像和人类专家对话一样，对文档提出任何问题。</p>
-              </div>
             </div>
             <div class="chat-input-area">
               <textarea
@@ -185,6 +177,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=3.2"></script>
+  <script src="/static/js/app.js?v=4.1"></script>
 </body>
 </html>

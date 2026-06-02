@@ -20,8 +20,8 @@ class KnowledgeBaseService:
     # ---- CRUD ----
 
     @staticmethod
-    def create(db: Session, name: str, description: str = "") -> KnowledgeBase:
-        kb = KnowledgeBase(name=name, description=description)
+    def create(db: Session, name: str, description: str = "", domain: str = "enterprise") -> KnowledgeBase:
+        kb = KnowledgeBase(name=name, description=description, domain=domain)
         db.add(kb)
         db.commit()
         db.refresh(kb)
@@ -32,9 +32,12 @@ class KnowledgeBaseService:
         return db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
 
     @staticmethod
-    def list_all(db: Session, skip: int = 0, limit: int = 50) -> List[KnowledgeBase]:
+    def list_all(db: Session, skip: int = 0, limit: int = 50, domain: Optional[str] = None) -> List[KnowledgeBase]:
+        q = db.query(KnowledgeBase)
+        if domain:
+            q = q.filter(KnowledgeBase.domain == domain)
         return (
-            db.query(KnowledgeBase)
+            q
             .order_by(KnowledgeBase.updated_at.desc())
             .offset(skip)
             .limit(limit)

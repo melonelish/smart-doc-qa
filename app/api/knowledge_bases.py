@@ -27,6 +27,7 @@ settings = get_settings()
 class CreateKBRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: str = Field(default="", max_length=1000)
+    domain: str = Field(default="enterprise", max_length=50)
 
 
 class UpdateKBRequest(BaseModel):
@@ -39,8 +40,8 @@ class AddDocsRequest(BaseModel):
 
 
 @router.get("/")
-async def list_knowledge_bases(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
-    kbs = KnowledgeBaseService.list_all(db, skip, limit)
+async def list_knowledge_bases(skip: int = 0, limit: int = 50, domain: Optional[str] = None, db: Session = Depends(get_db)):
+    kbs = KnowledgeBaseService.list_all(db, skip, limit, domain=domain)
     result = []
     for kb in kbs:
         docs = KnowledgeBaseService.get_documents(db, kb.id)
@@ -48,6 +49,7 @@ async def list_knowledge_bases(skip: int = 0, limit: int = 50, db: Session = Dep
             "id": kb.id,
             "name": kb.name,
             "description": kb.description,
+            "domain": kb.domain,
             "document_count": len(docs),
             "created_at": kb.created_at.isoformat(),
             "updated_at": kb.updated_at.isoformat(),
@@ -57,11 +59,12 @@ async def list_knowledge_bases(skip: int = 0, limit: int = 50, db: Session = Dep
 
 @router.post("/")
 async def create_knowledge_base(req: CreateKBRequest, db: Session = Depends(get_db)):
-    kb = KnowledgeBaseService.create(db, req.name, req.description)
+    kb = KnowledgeBaseService.create(db, req.name, req.description, domain=req.domain)
     return {
         "id": kb.id,
         "name": kb.name,
         "description": kb.description,
+        "domain": kb.domain,
         "document_count": 0,
         "created_at": kb.created_at.isoformat(),
         "updated_at": kb.updated_at.isoformat(),

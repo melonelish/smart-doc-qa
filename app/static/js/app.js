@@ -5,6 +5,26 @@ let selectedDocReady = false;
 let selectedKbId = null;
 let selectedKbName = null;
 let conversationId = null;
+let selectedDomain = 'enterprise';
+
+const DOMAINS = {
+  enterprise: {
+    id: 'enterprise',
+    name: '企业助手',
+    icon: '🏢',
+    description: '你公司的内部知识库。上传制度、技术文档、流程文件，AI 帮你在秒级找到答案。',
+    features: [
+      { q: '「年假怎么休？」', a: '查询公司制度、考勤规定' },
+      { q: '「报销流程是什么？」', a: '按步骤列出财务流程 + 引用相关制度文档' },
+      { q: '「这个项目的架构是怎样的？」', a: '分析技术文档，给出全局视角' },
+    ],
+    docTypes: [
+      { icon: '📄', name: '公司制度', desc: '员工手册、考勤制度、报销规定、绩效制度' },
+      { icon: '📘', name: '技术文档', desc: 'API 文档、架构设计、运维手册、配置说明' },
+      { icon: '📋', name: '流程文件', desc: '审批流程、SOP、项目管理规范' },
+    ],
+  },
+};
 
 const API_BASE = '';
 const STORAGE_PREFIX = 'smartdocqa_conv_';
@@ -74,6 +94,19 @@ function clearStoredConversation(docId) {
   if (docId) sessionStorage.removeItem(_storageKey(docId));
 }
 
+function relativeTime(dateStr) {
+  if (!dateStr) return '';
+  var diff = Date.now() - new Date(dateStr).getTime();
+  var mins = Math.floor(diff / 60000);
+  if (mins < 1) return '刚刚';
+  if (mins < 60) return mins + '分钟前';
+  var hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + '小时前';
+  var days = Math.floor(hours / 24);
+  if (days < 30) return days + '天前';
+  return new Date(dateStr).toLocaleDateString('zh-CN');
+}
+
 function buildMessageList() {
   const msgs = chatMessages.querySelectorAll('.message');
   const list = [];
@@ -99,7 +132,6 @@ const uploadPercent = document.getElementById('upload-percent');
 const chatDocName = document.getElementById('chat-doc-name');
 const chatDocStatus = document.getElementById('chat-doc-status');
 const kbList = document.getElementById('kb-list');
-const kbBadge = document.getElementById('kb-count-badge');
 
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -266,22 +298,102 @@ function addProcessingStyles() {
 }
 
 /* ============================================
-   Navigation
+   Domain Navigation
    ============================================ */
-document.querySelectorAll('.nav-item').forEach(item => {
-  item.addEventListener('click', () => {
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    item.classList.add('active');
-    const view = item.dataset.view;
-    document.getElementById('page-title').textContent =
-      view === 'chat' ? '💬 AI 智能问答' :
-      view === 'documents' ? '📁 文档管理' : '📤 上传文档';
-    if (view === 'upload') {
-      document.getElementById('column-left').scrollIntoView({ behavior: 'smooth' });
-      triggerUpload();
-    }
+function selectDomain(domainId) {
+  var domain = DOMAINS[domainId];
+  if (!domain) return;
+
+  if (selectedDomain === domainId) return;
+
+  if (selectedKbId) {
+    saveConversation();
+    selectedKbId = null;
+    selectedKbName = null;
+    conversationId = null;
+    updateChatHeader();
+    updateUploadBtn();
+    updateSelectorLabel();
+    renderKBDropdown();
+    refreshDocs();
+  }
+
+  selectedDomain = domainId;
+
+  document.querySelectorAll('.domain-item').forEach(function(el) {
+    el.classList.toggle('active', el.dataset.domain === domainId);
   });
-});
+
+  document.getElementById('page-title').textContent = domain.icon + ' ' + domain.name;
+
+  refreshKBs();
+  renderDomainIntro(domainId);
+}
+
+function renderDomainIntro(domainId) {
+  var domain = DOMAINS[domainId];
+  if (!domain) return;
+
+  conversationId = null;
+  clearStoredConversation(selectedKbId);
+
+  var featuresHtml = '';
+  if (domain.features && domain.features.length > 0) {
+    featuresHtml = '<div class="domain-section-label">它能做什么</div>' +
+      '<div class="domain-features">' +
+      domain.features.map(function(f) {
+        return '<div class="domain-feature">' +
+          '<span class="domain-feature-q">' + f.q + '</span>' +
+          '<span class="domain-feature-a">→ ' + f.a + '</span>' +
+        '</div>';
+      }).join('') +
+      '</div>';
+  }
+
+  var docTypesHtml = '';
+  if (domain.docTypes && domain.docTypes.length > 0) {
+    docTypesHtml = '<div class="domain-section-label">建议上传的文件类型</div>' +
+      '<div class="domain-doc-types">' +
+      domain.docTypes.map(function(dt) {
+        return '<div class="domain-doc-type">' +
+          '<div class="domain-doc-type-icon">' + dt.icon + '</div>' +
+          '<div class="domain-doc-type-name">' + dt.name + '</div>' +
+          '<div class="domain-doc-type-desc">' + dt.desc + '</div>' +
+        '</div>';
+      }).join('') +
+      '</div>';
+  }
+
+  var kbBanner = '';
+  var footerHtml = '';
+  if (selectedKbId) {
+    kbBanner = '<div style="background:var(--success-bg);border:1px solid var(--success);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:20px;display:flex;align-items:center;gap:8px;">' +
+      '<span style="font-size:16px;">✅</span>' +
+      '<span style="font-size:13px;color:var(--text-primary);">已选择知识库：<strong>' + escapeHtml(selectedKbName) + '</strong></span>' +
+    '</div>';
+    footerHtml = '<p class="welcome-hint" style="text-align:center;margin-top:12px;">💡 在下方输入问题，AI 将检索知识库内所有文档来回答</p>';
+  } else {
+    footerHtml = '<div class="domain-intro-footer">' +
+      '<button class="btn btn-primary welcome-btn" onclick="showCreateKBModal()">📁 创建知识库开始使用</button>' +
+      '<p class="welcome-hint">或从左侧下拉选择一个已有知识库</p>' +
+    '</div>';
+  }
+
+  chatMessages.innerHTML = '' +
+    '<div class="chat-empty" style="padding:20px;">' +
+      '<div class="domain-intro">' +
+        kbBanner +
+        '<div class="domain-intro-header">' +
+          '<div class="domain-intro-icon">' + domain.icon + '</div>' +
+          '<h2 class="domain-intro-title">' + domain.name + '</h2>' +
+          '<p class="domain-intro-desc">' + domain.description + '</p>' +
+        '</div>' +
+        featuresHtml +
+        docTypesHtml +
+        footerHtml +
+      '</div>' +
+    '</div>';
+}
 
 /* ============================================
    Upload - Drag & Drop on Document Card
@@ -309,67 +421,8 @@ fileInput.addEventListener('change', () => {
 });
 
 async function uploadFile(file) {
-  // If KB is selected, upload directly to KB
-  if (selectedKbId) {
-    uploadToKB(file);
-    return;
-  }
-  const maxSize = 10 * 1024 * 1024;
-  const allowed = ['.pdf', '.txt', '.md', '.csv', '.docx'];
-
-  const ext = '.' + file.name.split('.').pop().toLowerCase();
-  if (!allowed.includes(ext)) {
-    showToast(`不支持的文件类型: ${ext}`, 'error');
-    return;
-  }
-  if (file.size > maxSize) {
-    showToast('文件大小超过 10MB 限制', 'error');
-    return;
-  }
-
-  uploadProgress.classList.add('active');
-  uploadFilename.textContent = file.name;
-  uploadPercent.textContent = '0%';
-  progressFill.style.width = '0%';
-
-  const formData = new FormData();
-  formData.append('file', file);
-
-  try {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${API_BASE}/api/v1/documents/upload`);
-
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        progressFill.style.width = pct + '%';
-        uploadPercent.textContent = pct + '%';
-      }
-    };
-
-    xhr.onload = () => {
-      resetUploadProgress();
-      if (xhr.status === 200) {
-        const resp = JSON.parse(xhr.responseText);
-        showToast(`📄 "${file.name}" 上传成功 (${formatSize(resp.file_size)})`, 'success');
-        refreshDocs();
-        processDocumentAfterUpload(resp.id, file.name);
-      } else {
-        const detail = JSON.parse(xhr.responseText).detail || '上传失败';
-        showToast(`上传失败: ${detail}`, 'error');
-      }
-    };
-
-    xhr.onerror = () => {
-      resetUploadProgress();
-      showToast('网络错误，请确认服务是否正常运行', 'error');
-    };
-
-    xhr.send(formData);
-  } catch (e) {
-    resetUploadProgress();
-    showToast('上传异常: ' + e.message, 'error');
-  }
+  if (!selectedKbId) { showToast('请先选择知识库', 'warning'); return; }
+  uploadToKB(file);
 }
 
 function resetUploadProgress() {
@@ -493,7 +546,8 @@ let _kbItemsCache = [];
 
 async function refreshKBs() {
   try {
-    const resp = await fetch(`${API_BASE}/api/v1/knowledge-bases/?limit=50`);
+    const url = `${API_BASE}/api/v1/knowledge-bases/?limit=50&domain=${encodeURIComponent(selectedDomain)}`;
+    const resp = await fetch(url);
     if (!resp.ok) return;
     const data = await resp.json();
     _kbItemsCache = data.items || [];
@@ -505,42 +559,33 @@ async function refreshKBs() {
 
 function renderKBDropdown() {
   const container = document.getElementById('kb-dropdown-kbs');
-  const totalCount = document.getElementById('kb-dd-total-count');
   if (!container) return;
 
   if (!_kbItemsCache || _kbItemsCache.length === 0) {
     container.innerHTML = '<div class="kb-dropdown-item" style="color:var(--text-muted);cursor:default;font-size:12px;justify-content:center;">暂无知识库</div>';
-    if (totalCount) totalCount.textContent = '';
     return;
   }
 
-  // Update total doc count on "全部文档" item
-  try {
-    const allCount = document.querySelectorAll('#doc-list .doc-item').length;
-    if (totalCount && allCount > 0) totalCount.textContent = allCount;
-  } catch(e) {}
-
   container.innerHTML = _kbItemsCache.map(kb => {
     const isActive = kb.id === selectedKbId;
+    const time = relativeTime(kb.updated_at);
     return `
       <div class="kb-dropdown-item${isActive ? ' active' : ''}" onclick="selectKB('${kb.id}', '${escapeHtml(kb.name)}')">
         <span class="kb-dd-icon">📚</span>
-        <span class="kb-dd-name">${escapeHtml(kb.name)}</span>
-        <span class="kb-dd-count">${kb.document_count || 0}</span>
+        <span class="kb-dd-info">
+          <span class="kb-dd-name">${escapeHtml(kb.name)}</span>
+          <span class="kb-dd-meta">${kb.document_count || 0} 个文档 · ${time}</span>
+        </span>
         <span class="kb-dd-actions">
           <button class="dd-btn danger" title="删除" onclick="event.stopPropagation();deleteKB('${kb.id}')">×</button>
         </span>
       </div>`;
   }).join('');
 
-  // Highlight active items
   document.querySelectorAll('#kb-dropdown .kb-dropdown-item').forEach(el => {
-    if (!el.dataset.kbId && !el.querySelector('.kb-dd-name')) return;
     el.classList.toggle('active', el.querySelector('.kb-dd-name') &&
       _kbItemsCache.some(kb => kb.id === selectedKbId && kb.name === el.querySelector('.kb-dd-name').textContent));
   });
-  const allDocsItem = document.querySelector('#kb-dropdown .kb-dropdown-item[data-kb-id=""]');
-  if (allDocsItem) allDocsItem.classList.toggle('active', !selectedKbId);
 }
 
 function toggleKbDropdown() {
@@ -558,20 +603,13 @@ function toggleKbDropdown() {
 }
 
 function selectKB(kbId, kbName) {
-  var isDeselecting = (selectedKbId === kbId && kbId !== '') || (kbId === '' || !kbId);
-
-  if (isDeselecting) {
-    // Save current KB conversation before deselecting
+  if (selectedKbId === kbId) {
+    // Clicking the same KB → deselect
     if (selectedKbId) saveConversation();
     selectedKbId = null; selectedKbName = null;
   } else {
-    // Save current context before switching
-    if (selectedDocId) {
-      saveConversation();
-      selectedDocId = null; selectedDocName = null; selectedDocReady = false;
-    } else if (selectedKbId && selectedKbId !== kbId) {
-      saveConversation();
-    }
+    // Switching to a different KB
+    if (selectedKbId) saveConversation();
     selectedKbId = kbId;
     selectedKbName = kbName;
   }
@@ -583,7 +621,6 @@ function selectKB(kbId, kbName) {
   renderKBDropdown();
   closeKbDropdown();
 
-  // Try to restore KB conversation from sessionStorage
   if (selectedKbId) {
     var stored = loadConversation(selectedKbId);
     if (stored && stored.messages && stored.messages.length > 0) {
@@ -600,15 +637,13 @@ function selectKB(kbId, kbName) {
   }
 
   refreshDocs();
-
-  // Visual: deselect doc items
   document.querySelectorAll('.doc-item').forEach(el => el.classList.remove('selected'));
 }
 
 function updateSelectorLabel() {
   const label = document.getElementById('kb-selector-label');
   if (!label) return;
-  label.textContent = selectedKbId ? selectedKbName : '全部文档';
+  label.textContent = selectedKbId ? selectedKbName : '请选择知识库';
 }
 
 function updateUploadBtn() {
@@ -619,7 +654,7 @@ function updateUploadBtn() {
     btn.querySelector('.btn-upload-text').textContent = '上传到知识库';
   } else {
     btn.classList.remove('kb-active');
-    btn.querySelector('.btn-upload-text').textContent = '上传';
+    btn.querySelector('.btn-upload-text').textContent = '请先选择知识库';
   }
 }
 
@@ -706,7 +741,7 @@ async function createKB() {
     const resp = await fetch(`${API_BASE}/api/v1/knowledge-bases/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description: desc }),
+      body: JSON.stringify({ name, description: desc, domain: selectedDomain }),
     });
     if (resp.ok) {
       const kb = await resp.json();
@@ -723,7 +758,7 @@ async function createKB() {
 }
 
 async function uploadToKB(file) {
-  if (!selectedKbId) { showToast('请先选择文档或知识库', 'warning'); return; }
+  if (!selectedKbId) { showToast('请先选择知识库', 'warning'); return; }
   const maxSize = 10 * 1024 * 1024;
   const allowed = ['.pdf', '.txt', '.md', '.csv', '.docx'];
   const ext = '.' + file.name.split('.').pop().toLowerCase();
@@ -775,13 +810,21 @@ async function uploadToKB(file) {
 }
 
 async function refreshDocs() {
+  if (!selectedKbId) {
+    docList.innerHTML = '' +
+      '<div class="empty-state">' +
+        '<div class="empty-icon">📚</div>' +
+        '<p>知识库（Knowledge Base）是存放和管理文档的地方</p>' +
+        '<p style="font-size:12px;color:var(--text-muted);margin-top:6px;">将公司制度、技术文档、流程文件上传到知识库，AI 即可跨文档检索，秒级给出答案</p>' +
+      '</div>';
+    var badge = document.getElementById('doc-count-badge');
+    if (badge) badge.textContent = '请选择知识库';
+    var inlineCount = document.getElementById('doc-count-inline');
+    if (inlineCount) inlineCount.textContent = '';
+    return;
+  }
   try {
-    let url;
-    if (selectedKbId) {
-      url = `${API_BASE}/api/v1/knowledge-bases/${selectedKbId}/documents`;
-    } else {
-      url = `${API_BASE}/api/v1/documents/?skip=0&limit=50`;
-    }
+    var url = `${API_BASE}/api/v1/knowledge-bases/${selectedKbId}/documents`;
     const resp = await fetch(url);
     if (!resp.ok) return;
     const data = await resp.json();
@@ -798,11 +841,11 @@ async function refreshDocs() {
 
 function renderDocList(items) {
   if (!items || items.length === 0) {
-    docList.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-icon">📭</div>
-        <p>暂无文档，请上传你的第一个文档</p>
-      </div>`;
+    docList.innerHTML = '' +
+      '<div class="empty-state">' +
+        '<div class="empty-icon">📭</div>' +
+        '<p>' + (selectedKbId ? '该知识库暂无文档，点击「上传到知识库」添加文件' : '知识库（Knowledge Base）是存放和管理文档的地方。将文档上传到知识库后，AI 即可跨文档检索，智能回答你的问题。') + '</p>' +
+      '</div>';
     return;
   }
 
@@ -846,8 +889,8 @@ function updateChatHeader() {
     ? `<span class="conv-badge" title="多轮对话中">🔄</span>`
     : '';
   if (selectedKbId) {
-    chatDocName.innerHTML = selectedKbName + convIndicator;
-    chatDocStatus.textContent = 'Knowledge Base mode - ask across all KB documents';
+    chatDocName.innerHTML = DOMAINS[selectedDomain]?.icon + ' ' + selectedKbName + convIndicator;
+    chatDocStatus.textContent = DOMAINS[selectedDomain]?.name + ' · 检索知识库内全部文档回答';
     chatInput.disabled = false;
     btnSend.disabled = false;
     return;
@@ -910,12 +953,22 @@ function appendMessageEl(role, content, sources, persist) {
   message.appendChild(bubble);
 
   if (sources && sources.length > 0) {
-    const sourcesDiv = document.createElement('div');
-    sourcesDiv.className = 'message-sources';
-    sourcesDiv.innerHTML = '📎 来源：' + sources.map(s => {
-      const name = s.split(/[\\/]/).pop();
-      return `<span class="source-tag">${escapeHtml(name)}</span>`;
+    var superscripts = '¹²³⁴⁵⁶⁷⁸⁹';
+    var markers = sources.map(function(_, i) {
+      var num = superscripts[i] || (i + 1);
+      return '<sup class="cite-sup">[' + num + ']</sup>';
     }).join('');
+    bubble.innerHTML += '<span class="cite-markers">' + markers + '</span>';
+
+    var sourcesDiv = document.createElement('div');
+    sourcesDiv.className = 'message-sources';
+    var sourcesHtml = '<div style="font-weight:500;margin-bottom:6px;">📎 来源：</div>';
+    sources.forEach(function(s, i) {
+      var num = superscripts[i] || (i + 1);
+      var name = s.split(/[\\/]/).pop();
+      sourcesHtml += '<div class="source-line"><span class="source-num">[' + num + ']</span><span class="source-tag">' + escapeHtml(name) + '</span></div>';
+    });
+    sourcesDiv.innerHTML = sourcesHtml;
     bubble.appendChild(sourcesDiv);
   }
 
@@ -1100,15 +1153,10 @@ function removeTypingIndicator() {
 }
 
 function clearChat() {
-  chatMessages.innerHTML = `
-    <div class="chat-empty">
-      <div class="empty-icon">🧠</div>
-      <h3>知识库问答模式</h3>
-      <p>${selectedKbName ? `你已选择「${selectedKbName}」，AI 将检索知识库内所有文档来回答。直接输入问题开始吧！` : '请先选择或创建一个知识库，然后向 AI 提问。'}</p>
-    </div>`;
   conversationId = null;
   clearStoredConversation(selectedKbId);
   updateChatHeader();
+  renderDomainIntro(selectedDomain);
 }
 
 function handleChatKeydown(e) {
@@ -1143,7 +1191,7 @@ async function sendMessage() {
   if (!question) return;
 
   if (!selectedKbId) {
-    showToast('请先选择文档或知识库', 'warning');
+    showToast('请先选择知识库', 'warning');
     return;
   }
 
@@ -1223,12 +1271,22 @@ async function sendMessage() {
     if (streamBubble) {
       streamBubble.innerHTML = formatAssistantText(fullText);
       if (metaData.sources && metaData.sources.length > 0) {
+        var superscripts = '¹²³⁴⁵⁶⁷⁸⁹';
+        var markers = metaData.sources.map(function(_, i) {
+          var num = superscripts[i] || (i + 1);
+          return '<sup class="cite-sup">[' + num + ']</sup>';
+        }).join('');
+        streamBubble.innerHTML += '<span class="cite-markers">' + markers + '</span>';
+
         var sd = document.createElement('div');
         sd.className = 'message-sources';
-        sd.innerHTML = '📎 来源：' + metaData.sources.map(function(s) {
+        var sHtml = '<div style="font-weight:500;margin-bottom:6px;">📎 来源：</div>';
+        metaData.sources.forEach(function(s, i) {
+          var num = superscripts[i] || (i + 1);
           var name = s.split(/[\\/]/).pop();
-          return '<span class="source-tag">' + escapeHtml(name) + '</span>';
-        }).join('');
+          sHtml += '<div class="source-line"><span class="source-num">[' + num + ']</span><span class="source-tag">' + escapeHtml(name) + '</span></div>';
+        });
+        sd.innerHTML = sHtml;
         streamBubble.appendChild(sd);
       }
     }
@@ -1427,3 +1485,4 @@ async function previewDocument(docId) {
 initTheme();
 refreshDocs();
 refreshKBs();
+renderDomainIntro('enterprise');

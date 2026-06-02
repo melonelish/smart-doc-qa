@@ -62,6 +62,7 @@ class KnowledgeBase(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(200), nullable=False, comment="Knowledge base name")
     description = Column(Text, nullable=True, comment="Knowledge base description")
+    domain = Column(String(50), default='enterprise', comment="Domain category: enterprise / research / legal")
     created_at = Column(DateTime, default=datetime.utcnow, comment="Creation time")
     updated_at = Column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="Last update time"
