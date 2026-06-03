@@ -31,6 +31,11 @@ env/
 # 向量存储
 data/vector_store/
 data/uploads/
+kb_*/
+**/kb_*/
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*/
+**/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*/
+*.faiss
 
 # 日志
 logs/
@@ -47,8 +52,15 @@ docker-compose.override.yml
 .pytest_cache/
 .coverage
 htmlcov/
+tests/test.txt
+tests/qa_payload.json
+test_output.json
+test_docs/
 
 # 大文件
 *.pkl
 *.h5
 *.onnx
+
+# 运行日志
+*.pid

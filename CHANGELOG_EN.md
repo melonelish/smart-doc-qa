@@ -1,5 +1,35 @@
 # Changelog
 
+## [v2.3] - 2026-06-03
+
+### 🚀 Research Assistant — Fully Active
+
+The scientific research domain is now live with **5 enhanced AI capabilities**:
+
+- **Confidence annotation**: Automatic `〖High confidence〗` `〖Medium confidence〗` `〖Low confidence〗` markers on conclusions, helping users assess reliability
+- **Critical analysis**: `⚠️ Note:` section proactively highlights methodology limitations, data biases, and generalization risks
+- **Traceable follow-ups**: Each answer ends with `🔍 Further questions:` suggestions to guide deeper exploration
+- **Multi-format citations**: `[¹][²][³]` superscript references with APA / MLA / GB/T 7714 support
+- **Cross-lingual analysis**: Mixed Chinese/English input and output; domain-specific terms preserved in original language
+
+### ✨ AI Capabilities Showcase
+
+- New **"🤖 AI Capabilities"** card area on the domain intro page, visually displaying each domain's unique AI strengths
+- Cards feature hover highlight interaction, helping new users quickly understand AI specialties
+
+### 🐛 Bug Fixes
+
+#### Backend
+- **HF_ENDPOINT timing issue**: `qa_service.py` set the env var after `huggingface_hub` was already imported, causing `WinError 10060` connection timeouts → fixed by parsing `.env` at module level before any HF imports, ensuring offline cache is used
+- **Dependency installation**: Added `rank-bm25` and `jieba` to dependencies; BM25 hybrid search is now fully functional instead of throwing ImportError
+
+### 🔧 Improvements
+
+- Research domain SYSTEM_PROMPT now embeds all 5 enhancement rules
+- Frontend `DOMAINS` config supports `capabilities` structure for easy domain extension
+
+---
+
 ## [v2.1] - 2026-06-01
 
 ### 🐛 Bug Fixes

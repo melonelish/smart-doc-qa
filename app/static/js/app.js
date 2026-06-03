@@ -23,6 +23,35 @@ const DOMAINS = {
       { icon: '📘', name: '技术文档', desc: 'API 文档、架构设计、运维手册、配置说明' },
       { icon: '📋', name: '流程文件', desc: '审批流程、SOP、项目管理规范' },
     ],
+    capabilities: [
+      { icon: '🎯', label: '精准匹配', desc: '从海量文档中秒级定位答案' },
+      { icon: '📑', label: '条款溯源', desc: '每个回答附带原始出处引用' },
+      { icon: '🔄', label: '多文档串联', desc: '跨文档关联分析，全局视角' },
+      { icon: '📊', label: '流程拆解', desc: '制度流程逐步可视化呈现' },
+    ],
+  },
+  research: {
+    id: 'research',
+    name: '科研助手',
+    icon: '🔬',
+    description: '你的智能文献分析伙伴。上传学术论文、实验报告，AI 深度分析、交叉对比、溯源追问。',
+    features: [
+      { q: '「这篇论文的核心创新点是什么？」', a: '提炼研究方法、实验结果与贡献，标注置信度' },
+      { q: '「这几篇论文的方法有何异同？」', a: '交叉对比技术路线与实验设置，指出优劣' },
+      { q: '「实验设计有什么潜在缺陷？」', a: '批判性分析样本量、方法局限、结论泛化风险' },
+    ],
+    docTypes: [
+      { icon: '📄', name: '学术论文', desc: '期刊论文、会议论文、预印本、学位论文' },
+      { icon: '📊', name: '实验报告', desc: '实验数据、统计分析、结果表格、方法说明' },
+      { icon: '📚', name: '文献综述', desc: '研究进展、技术调研、白皮书、技术报告' },
+    ],
+    capabilities: [
+      { icon: '📊', label: '置信度标注', desc: '高/中/低三档区分结论可信程度' },
+      { icon: '⚠️', label: '批判性分析', desc: '主动指出方法局限与潜在风险' },
+      { icon: '🔍', label: '溯源追问', desc: '回答后自动生成深入追问建议' },
+      { icon: '📚', label: '多格式引用', desc: '支持 APA / MLA / GB/T 7714' },
+      { icon: '🌐', label: '跨语言分析', desc: '中英文混合文献无障碍分析' },
+    ],
   },
 };
 
@@ -337,6 +366,22 @@ function renderDomainIntro(domainId) {
   conversationId = null;
   clearStoredConversation(selectedKbId);
 
+  var capabilitiesHtml = '';
+  if (domain.capabilities && domain.capabilities.length > 0) {
+    capabilitiesHtml = '<div class="domain-section-label">🤖 AI 能力特点</div>' +
+      '<div class="domain-capabilities">' +
+      domain.capabilities.map(function(c) {
+        return '<div class="domain-capability">' +
+          '<span class="domain-capability-icon">' + c.icon + '</span>' +
+          '<div class="domain-capability-body">' +
+            '<span class="domain-capability-label">' + c.label + '</span>' +
+            '<span class="domain-capability-desc">' + c.desc + '</span>' +
+          '</div>' +
+        '</div>';
+      }).join('') +
+      '</div>';
+  }
+
   var featuresHtml = '';
   if (domain.features && domain.features.length > 0) {
     featuresHtml = '<div class="domain-section-label">它能做什么</div>' +
@@ -388,6 +433,7 @@ function renderDomainIntro(domainId) {
           '<h2 class="domain-intro-title">' + domain.name + '</h2>' +
           '<p class="domain-intro-desc">' + domain.description + '</p>' +
         '</div>' +
+        capabilitiesHtml +
         featuresHtml +
         docTypesHtml +
         footerHtml +

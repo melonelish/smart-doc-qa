@@ -304,7 +304,7 @@ The v2.2 release introduces a **domain-driven architecture**:
 | Domain | Status | Purpose |
 |--------|--------|---------|
 | 🏢 **Enterprise Assistant** | ✅ Active | Company knowledge: policies, tech docs, workflows |
-| 🔬 **Research Assistant** | 🚧 Coming Soon | Academic papers, research data, literature review |
+| 🔬 **Research Assistant** | ✅ Active | Academic papers, research data, literature review |
 | ⚖️ **Legal Assistant** | 🚧 Coming Soon | Legal documents, contracts, case analysis |
 
 Each domain has **completely isolated knowledge bases** — documents, conversations, and data never cross domain boundaries. Switching domains shows a dedicated introduction page for that domain.
