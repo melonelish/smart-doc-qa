@@ -26,8 +26,10 @@ const DOMAINS = {
     capabilities: [
       { icon: '🎯', label: '精准匹配', desc: '从海量文档中秒级定位答案' },
       { icon: '📑', label: '条款溯源', desc: '每个回答附带原始出处引用' },
+      { icon: '📊', label: '表格解析', desc: 'PDF 表格数据自动提取与精确回答' },
+      { icon: '📈', label: '数值查询', desc: '智能区分数值类与概念类问题' },
       { icon: '🔄', label: '多文档串联', desc: '跨文档关联分析，全局视角' },
-      { icon: '📊', label: '流程拆解', desc: '制度流程逐步可视化呈现' },
+      { icon: '⚡', label: '趋势检测', desc: '自动标注异常值与变化方向' },
     ],
   },
   research: {
@@ -1461,7 +1463,10 @@ async function previewDocument(docId) {
     modal.innerHTML = '<div class=\"preview-card\">' +
       '<div class=\"preview-header\">' +
         '<h3 style=\"font-size:14px;font-weight:600;\" id=\"preview-title\">\u6587\u6863\u9884\u89c8</h3>' +
-        '<button class=\"btn-icon\" onclick=\"document.getElementById(\x27preview-modal\x27).style.display=\x27none\x27\">\u2715</button>' +
+        '<div style=\"display:flex;align-items:center;gap:8px;\">' +
+          '<button class=\"btn-icon\" id=\"preview-download-btn\" title=\"下载文件\" style=\"font-size:16px;\">\u2b07</button>' +
+          '<button class=\"btn-icon\" onclick=\"document.getElementById(\x27preview-modal\x27).style.display=\x27none\x27\">\u2715</button>' +
+        '</div>' +
       '</div>' +
       '<div class=\"preview-body\" id=\"preview-content\"></div>' +
     '</div>';
@@ -1514,6 +1519,26 @@ async function previewDocument(docId) {
         document.getElementById('preview-content').innerHTML =
           '<div style=\"overflow:auto;max-height:60vh;\"><table style=\"border-collapse:collapse;width:100%;font-size:12px;\">' +
           rows + '</table></div>';
+      }
+    } else if (doc.file_type === '.pdf') {
+      document.getElementById('preview-content').innerHTML =
+        '<iframe src=\"/api/v1/documents/' + docId + '/file\" ' +
+        'style=\"width:100%;height:70vh;border:none;border-radius:6px;\"></iframe>';
+      // Bind download button — user can choose whether to download
+      var downloadBtn = document.getElementById('preview-download-btn');
+      if (downloadBtn) {
+        var oldClick = downloadBtn._clickHandler;
+        if (oldClick) downloadBtn.removeEventListener('click', oldClick);
+        var handler = function() {
+          var a = document.createElement('a');
+          a.href = '/api/v1/documents/' + docId + '/file';
+          a.download = doc.filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        };
+        downloadBtn.addEventListener('click', handler);
+        downloadBtn._clickHandler = handler;
       }
     } else {
       document.getElementById('preview-content').innerHTML =

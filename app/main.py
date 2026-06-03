@@ -20,6 +20,13 @@ from app.services.progress_ws import progress_tracker
 
 settings = get_settings()
 
+# ── Debug: write vector_store_path to a file ──
+try:
+    with open("_debug_path.txt", "w") as _f:
+        _f.write(repr(settings.vector_store_path) + "\n")
+except Exception:
+    pass
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -153,6 +160,21 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check():
         return {"status": "healthy"}
+
+    @app.get("/debug/vector-store/{kb_id}")
+    async def debug_vector_store(kb_id: str):
+        from pathlib import Path
+        from app.core.config import get_settings
+        s = get_settings()
+        store_dir = Path(s.vector_store_path) / f"kb_{kb_id}"
+        idx = store_dir / "index.faiss"
+        return {
+            "vector_store_path": repr(s.vector_store_path),
+            "store_dir": str(store_dir),
+            "store_dir_exists": store_dir.exists(),
+            "idx_exists": idx.exists(),
+            "store_contents": [str(p.name) for p in store_dir.iterdir()] if store_dir.exists() else [],
+        }
 
     @app.get("/")
     async def serve_frontend():

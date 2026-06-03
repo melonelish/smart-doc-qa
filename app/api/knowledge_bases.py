@@ -210,6 +210,7 @@ async def upload_to_kb(kb_id: str, file: UploadFile = File(...), db: Session = D
         kb_store_name = f"kb_{kb_id}"
         qa = QAService()
         qa.create_vector_store(chunks, kb_store_name)
+        qa.extract_and_store_tables(file_path, kb_store_name)
         # Update doc_ids.txt for tracking
         doc_ids_path = Path(settings.vector_store_path) / kb_store_name / "doc_ids.txt"
         existing_ids = set()

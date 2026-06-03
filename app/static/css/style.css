@@ -997,8 +997,8 @@ p {
 .preview-overlay[style*="flex"] { display: flex !important; }
 .preview-card {
   background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 24px 28px; width: 680px;
-  max-width: 92vw; max-height: 80vh; overflow: hidden;
+  border-radius: var(--radius-lg); padding: 24px 28px; width: 800px;
+  max-width: 95vw; max-height: 90vh; overflow: hidden;
   box-shadow: var(--shadow-lg); display: flex; flex-direction: column;
 }
 .preview-header {

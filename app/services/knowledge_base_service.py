@@ -175,6 +175,11 @@ class KnowledgeBaseService:
         kb_store_name = f"kb_{kb_id}"
         qa = QAService()
         store_dir = qa.create_vector_store(all_chunks, kb_store_name)
+        # Extract tables per-document and merge into KB store
+        for doc_id in doc_ids:
+            doc = db.query(Document).filter(Document.id == doc_id).first()
+            if doc and doc.status == DocumentStatus.READY:
+                qa.extract_and_store_tables(doc.file_path, kb_store_name)
         meta_path = Path(settings.vector_store_path) / kb_store_name / "doc_ids.txt"
         meta_path.write_text(",".join(doc_ids), encoding="utf-8")
         return store_dir

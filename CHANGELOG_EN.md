@@ -1,5 +1,41 @@
 # Changelog
 
+## [v2.4] - 2026-06-03
+
+### 🚀 Structured Data Extraction
+
+Automatic PDF table extraction, precise numerical Q&A, and intelligent query type detection.
+
+#### New Features
+
+- **PDF Table Parsing**: Extract structured tables from PDF files using pdfplumber — supports complex headers and multi-row tables
+- **Query Type Detection**: Classify questions as `numeric` (how many / ratio / growth / ranking) vs `semantic` — different retrieval paths
+- **Structured Q&A**: Numerical questions answered from extracted table data first; LLM performs trend comparison (↑/↓/→)
+- **PDF Inline Preview**: Click a document to preview PDF directly in the browser — no more forced downloads
+- **Download Button**: ⬇ button in the preview header gives users the choice to download or not
+
+#### Architecture Improvements
+
+- **Dual-path retrieval**: numeric → structured table lookup + semantic → FAISS+BM25+Rerank vector search, running in parallel
+- **Query classifier**: lightweight keyword + comparison-word based detector
+- **Prompt enhancement**: Enterprise System Prompt updated with "prefer table data" and "trend analysis" rules
+- **Frontend capabilities**: Enterprise domain now shows "Table Parsing", "Numerical Query", "Trend Detection" badges
+
+### 🐛 Bug Fixes
+
+- **Pydantic v2 type coercion**: `SourceChunk.page` defined as `str` but FAISS metadata `page` is `int` — ValueError was caught silently → fixed to `str(doc.metadata.get("page") or "")`
+- **PDF auto-download**: `FileResponse` with `filename` caused Starlette to overwrite `Content-Disposition` to `attachment` → removed `filename` param, use `headers` only for `inline`
+- **Download button no-op**: Preview download button had UI but no logic → bound click event to trigger download
+
+### 🔧 Improvements
+
+- Enterprise capability tags updated: removed "Flow Decomposition", added "Table Parsing", "Numerical Query", "Trend Detection"
+- Preview modal layout: width 680px → 800px, max-height 80vh → 90vh
+- Skip table extraction for non-PDF files (zero overhead)
+- Debug log cleanup: removed `_debug_askkb.txt`, `_debug_load.txt` temporary files
+
+---
+
 ## [v2.3] - 2026-06-03
 
 ### 🚀 Research Assistant — Fully Active

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+import os
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -75,6 +76,7 @@ async def process_document(
         qa = QAService()
         progress_tracker.set(doc_id, "正在创建向量库...", 60)
         qa.create_vector_store(chunks, doc.id)
+        qa.extract_and_store_tables(doc.file_path, doc.id)
         progress_tracker.set(doc_id, "处理完成", 100)
         DocumentService.update_document_status(
             db, doc, DocumentStatus.READY, chunk_count=len(chunks)
@@ -135,6 +137,31 @@ async def get_document_content(doc_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="File not found on disk")
     from fastapi.responses import PlainTextResponse
     return PlainTextResponse(content=content)
+
+
+@router.get("/{doc_id}/file")
+async def get_document_file(doc_id: str, db: Session = Depends(get_db)):
+    """Return the raw uploaded file for inline preview (e.g. PDF)."""
+    from fastapi.responses import FileResponse
+    doc = DocumentService.get_document(db, doc_id)
+    if not doc:
+        raise DocumentNotFoundError(doc_id)
+    if not os.path.exists(doc.file_path):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+    media_type = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }.get(doc.file_type, "application/octet-stream")
+    # NOTE: Do NOT pass filename= to FileResponse — Starlette's __call__
+    # internally overwrites Content-Disposition to "attachment" when
+    # filename is set, even if we already set it to "inline" via headers.
+    return FileResponse(
+        doc.file_path,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{doc.filename}"'},
+    )
 
 
 @router.get("/{doc_id}")

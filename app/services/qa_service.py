@@ -54,6 +54,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import get_settings
+from app.services.structured_store import load_tables, save_tables, search_tables
 
 settings = get_settings()
 
@@ -69,12 +70,15 @@ DOMAIN_PROMPTS = {
         "2. 【依据详实】从提供的文档内容中提取具体条款、数据或步骤作为依据。如果涉及制度规定，引用相关条款号。如果涉及流程，列出具体步骤。\n"
         "3. 【引用来源】在每个依据后使用[¹][²][³]等上标标注来自哪个文档，引用标记必须在原文中出现过。\n"
         "4. 【专业规范】用词正式、条理清晰，符合企业文档的表述风格。\n"
-        "5. 【实事求是】如果文档中没有相关信息，如实告知，不要编造。\n\n"
+        "5. 【实事求是】如果文档中没有相关信息，如实告知，不要编造。\n"
+        "6. 【表格数据】如果提供了表格数据（如季度报表、统计表），优先从表格中提取精确数字回答，且要标注对应的行和列信息以表明数据来源。\n"
+        "7. 【趋势分析】如果提供多个时期的表格数据，自动做趋势比较，用↑/↓/→标记变化方向，并提示异常值。\n\n"
         "企业文档类型说明：\n"
         "- 员工手册/公司制度：涉及考勤、薪酬、绩效、休假、报销等规定\n"
         "- 技术文档：API文档、架构设计、运维手册、开发规范\n"
-        "- 流程文件：SOP、审批流程、项目管理规范\n\n"
-        "请以「结论→依据→引用」的结构组织回答。"
+        "- 流程文件：SOP、审批流程、项目管理规范\n"
+        "- 报表数据：季度报表、年度报表、统计表格、数据分析报告\n\n"
+        "请以「结论→依据→引用」的结构组织回答。如果问题涉及数值查询或对比，优先使用表格格式输出结果。"
     ),
     "research": (
         "你是一个专业的科研文献分析助手，帮助研究人员深度分析学术论文、实验数据和科研资料。\n\n"
@@ -289,6 +293,37 @@ def _make_key(doc: Document) -> str:
     return f"{doc.page_content[:80]}|{doc.metadata.get('source','')}|{doc.metadata.get('page','')}|{doc.metadata.get('chunk','')}"
 
 
+# ── Query type detection ────────────────────────────────
+
+_NUMERIC_PATTERNS = [
+    "多少", "几", "占比", "比例", "率", "总额", "总计", "平均",
+    "最高", "最低", "最大", "最小", "排名", "排行", "前几",
+    "增长", "下降", "同比", "环比", "涨幅", "跌幅",
+    "数字", "数据", "统计", "数字是多少",
+]
+
+
+def detect_query_type(question: str) -> str:
+    """
+    Classify a user question as ``"numeric"`` or ``"semantic"``.
+
+    ``"numeric"``  — questions that ask for specific numbers, rankings,
+                      comparisons, or table-contained data.
+    ``"semantic"`` — conceptual / explanatory questions answered by
+                      general text retrieval.
+    """
+    q = question.strip().lower()
+    for pat in _NUMERIC_PATTERNS:
+        if pat in q:
+            return "numeric"
+
+    # Check for explicit comparison between two entities
+    if any(sep in q for sep in [" vs ", " versus ", " 和 ", "与", "对比", "区别", "差异"]):
+        return "numeric"
+
+    return "semantic"
+
+
 # ═══════════════════════════════════════════════════════════
 #  CROSS-ENCODER RERANK
 # ═══════════════════════════════════════════════════════════
@@ -501,6 +536,12 @@ class QAService:
         """Load FAISS index. Returns None if missing."""
         vector_store_dir = Path(settings.vector_store_path) / vector_store_name
         idx_path = vector_store_dir / "index.faiss"
+        # ── Debug ──
+        try:
+            with open("_debug_load.txt", "a") as _f:
+                _f.write(f"name={vector_store_name} dir={vector_store_dir} idx_exists={idx_path.exists()} vector_path={repr(settings.vector_store_path)}\n")
+        except Exception:
+            pass
         if not idx_path.exists():
             return None
         embeddings = get_embeddings()
@@ -511,6 +552,13 @@ class QAService:
                 allow_dangerous_deserialization=True,
             )
         except Exception as e:
+            import traceback
+            err = traceback.format_exc()
+            try:
+                with open("_debug_faiss_error.txt", "a") as _f:
+                    _f.write(f"FAISS load error for {vector_store_name}:\n{err}\n")
+            except Exception:
+                pass
             # Dimension mismatch → old vector store, needs reprocessing
             raise RuntimeError(
                 f"无法加载向量库 '{vector_store_name}'，可能是旧版本创建的。"
@@ -532,6 +580,25 @@ class QAService:
         vector_store_dir = Path(settings.vector_store_path) / vector_store_name
         if vector_store_dir.exists():
             shutil.rmtree(vector_store_dir)
+
+    @staticmethod
+    def extract_and_store_tables(file_path: str, vector_store_name: str) -> None:
+        """
+        Extract tables from a PDF and persist them alongside the FAISS index.
+        Safe to call on non-PDF files — no-op for .txt/.md/.csv/.docx.
+        """
+        ext = Path(file_path).suffix.lower()
+        if ext != ".pdf":
+            return
+        try:
+            from app.services.table_parser import extract_tables_from_pdf
+            tables = extract_tables_from_pdf(file_path)
+            if tables:
+                store_dir = Path(settings.vector_store_path) / vector_store_name
+                store_dir.mkdir(parents=True, exist_ok=True)
+                save_tables(tables, str(store_dir))
+        except Exception as exc:
+            logger.warning(f"[qa] Table extraction skipped for {file_path}: {exc}")
 
     # ------- LLM chat wrapper ------------------------------------
 
@@ -776,6 +843,17 @@ class QAService:
         """Retrieve from a knowledge base (multi-document FAISS index)."""
         kb_store_name = f"kb_{kb_id}"
 
+        # ── Debug log ──
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"--- ask_question_by_kb called for kb_id={kb_id} ---\n")
+                _f.write(f"  settings.vector_store_path: {repr(settings.vector_store_path)}\n")
+                _f.write(f"  kb_store_name: {kb_store_name}\n")
+                _f.write(f"  store_dir: {str(Path(settings.vector_store_path) / kb_store_name)}\n")
+                _f.write(f"  store_dir exists: {(Path(settings.vector_store_path) / kb_store_name).exists()}\n")
+        except Exception:
+            pass
+
         # Look up KB domain
         _domain = "enterprise"
         try:
@@ -791,9 +869,59 @@ class QAService:
         except Exception:
             pass
 
+        # ── 1) Classify query & load tables (if any) ──────────────
+        qtype = detect_query_type(question)
+        store_dir = str(Path(settings.vector_store_path) / kb_store_name)
+        tables = load_tables(store_dir) if Path(store_dir).exists() else []
+        table_context = ""
+
+        if qtype == "numeric" and tables:
+            matched = search_tables(tables, question)
+            if matched:
+                # Format matched tables as markdown for the LLM
+                table_parts = []
+                for i, tbl in enumerate(matched[:3]):  # top-3 tables
+                    lines = [f"[表格 {i + 1}]"]
+                    if tbl.get("page"):
+                        lines[0] += f"  (第 {tbl['page']} 页)"
+                    lines.append("")
+
+                    # Header row
+                    headers = tbl.get("headers", [])
+                    if headers:
+                        lines.append("| " + " | ".join(headers) + " |")
+                        lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+
+                    # Data rows
+                    for row in tbl.get("rows", []):
+                        lines.append("| " + " | ".join(row) + " |")
+
+                    table_parts.append("\n".join(lines))
+
+                table_context = (
+                    "\n\n## 文档中的表格数据\n\n"
+                    + "\n\n".join(table_parts)
+                    + "\n\n注意：表格数据优先于纯文本段落，回答数值问题时请优先从表格中提取精确数据。"
+                )
+
+        # ── 2) Text retrieval (FAISS + BM25 → RRF → Rerank) ──────
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"  about to call load_vector_store for {kb_store_name}...\n")
+        except Exception:
+            pass
+
         vector_store = self.load_vector_store(kb_store_name)
+
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"  load_vector_store returned: {'not None' if vector_store is not None else 'None'}\n")
+                if vector_store is not None:
+                    _f.write(f"  type(vector_store): {type(vector_store).__name__}\n")
+        except Exception:
+            pass
+
         if vector_store is None:
-            # Fallback: try to rebuild on the fly
             from app.db.database import SessionLocal
             from app.services.knowledge_base_service import KnowledgeBaseService
             db = SessionLocal()
@@ -803,41 +931,128 @@ class QAService:
                 db.close()
             vector_store = self.load_vector_store(kb_store_name)
             if vector_store is None:
+                try:
+                    with open("_debug_askkb.txt", "a") as _f:
+                        _f.write(f"  FAILED: vector_store still None, raising ValueError\n")
+                except Exception:
+                    pass
                 raise ValueError(f"Knowledge base index not found: {kb_id}")
 
         candidates = None
         actual_hybrid = use_hybrid
+        
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"  about to retrieve...\n")
+        except Exception:
+            pass
+        
         if use_hybrid:
+            try:
+                with open("_debug_askkb.txt", "a") as _f:
+                    _f.write(f"  using hybrid search...\n")
+            except Exception:
+                pass
+            
             all_chunks = self._load_chunks(kb_store_name)
+            try:
+                with open("_debug_askkb.txt", "a") as _f:
+                    _f.write(f"  loaded chunks: {len(all_chunks) if all_chunks else 0}\n")
+            except Exception:
+                pass
+            
             if all_chunks:
                 bm25 = BM25Retriever(all_chunks)
                 bm25_results = bm25.search(question, k=top_k * 5)
+                try:
+                    with open("_debug_askkb.txt", "a") as _f:
+                        _f.write(f"  BM25 results: {len(bm25_results)}\n")
+                except Exception:
+                    pass
             else:
                 bm25_results = []
+            
             faiss_results = vector_store.similarity_search_with_score(
                 question, k=top_k * 5
             )
+            try:
+                with open("_debug_askkb.txt", "a") as _f:
+                    _f.write(f"  FAISS results: {len(faiss_results)}\n")
+            except Exception:
+                pass
+            
             candidates = _rrf_fusion(faiss_results, bm25_results, k=60)
+        
         if candidates is None:
             candidates = vector_store.similarity_search_with_score(
                 question, k=top_k * 5
             )
 
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"  total candidates: {len(candidates)}\n")
+        except Exception:
+            pass
+
         if not candidates:
+            try:
+                with open("_debug_askkb.txt", "a") as _f:
+                    _f.write(f"  FAILED: no candidates, raising ValueError\n")
+            except Exception:
+                pass
             raise ValueError("No relevant document passages found")
 
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"  about to rerank...\n")
+        except Exception:
+            pass
+        
         if use_rerank and len(candidates) > top_k:
             pool = candidates[: min(top_k * 3, len(candidates))]
+            try:
+                with open("_debug_askkb.txt", "a") as _f:
+                    _f.write(f"  calling rerank...\n")
+            except Exception:
+                pass
             final_docs = _rerank(question, pool, top_k=top_k)
+            try:
+                with open("_debug_askkb.txt", "a") as _f:
+                    _f.write(f"  rerank done, final_docs: {len(final_docs)}\n")
+            except Exception:
+                pass
         else:
             final_docs = [doc for doc, _ in candidates[:top_k]]
+            try:
+                with open("_debug_askkb.txt", "a") as _f:
+                    _f.write(f"  no rerank, final_docs: {len(final_docs)}\n")
+            except Exception:
+                pass
+        
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"  proceeding to build context...\n")
+        except Exception:
+            pass
 
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"  iterating over final_docs ({len(final_docs)} items)...\n")
+        except Exception:
+            pass
+        
         context_parts = []
         source_details = __import__('collections').OrderedDict()
 
         for i, doc in enumerate(final_docs):
+            try:
+                with open("_debug_askkb.txt", "a") as _f:
+                    _f.write(f"    processing doc {i + 1}...\n")
+            except Exception:
+                pass
+            
             source = doc.metadata.get("source", "Unknown")
-            page = doc.metadata.get("page", "")
+            page = str(doc.metadata.get("page") or "")
             chunk_idx = doc.metadata.get("chunk", i)
             doc_name = doc.metadata.get("document_name", source)
 
@@ -857,11 +1072,18 @@ class QAService:
                     else doc.page_content
                 ),
             })
+        
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"  building final context...\n")
+        except Exception:
+            pass
 
         sep = "\n\n" + "=" * 60 + "\n\n"
         context = sep.join(context_parts)
         context = "\n\n" + context + "\n\n" + "=" * 60
 
+        # ── 3) Build user message (history + table_context + text context + question) ──
         history_text = ""
         if conversation_id:
             history = conversation_memory.get_history(conversation_id, max_turns=6)
@@ -878,12 +1100,14 @@ class QAService:
 
         user_message = (
             f"{history_text}"
+            f"{table_context}"  # <-- table data injected here for numeric queries
             f"## Document Fragments (total {len(final_docs)})\n"
             f"{context}\n\n"
             f"## Current Question\n\n"
             f"{question}"
         )
 
+        # ── 4) LLM generation ──
         answer = self.llm_chat(get_domain_prompt(_domain), user_message)
         answer = self._format_answer(answer)
 
@@ -907,8 +1131,10 @@ class QAService:
             else "vector + rerank" if use_rerank
             else "vector"
         )
+        if table_context:
+            retrieve_method += " + tables"
 
-        return {
+        result = {
             "question": question,
             "conversation_id": convo_id,
             "answer": answer,
@@ -921,4 +1147,12 @@ class QAService:
             "retrieval_method": retrieve_method,
             "kb_id": kb_id,
         }
+        
+        try:
+            with open("_debug_askkb.txt", "a") as _f:
+                _f.write(f"  returning answer successfully!\n")
+        except Exception:
+            pass
+        
+        return result
 
