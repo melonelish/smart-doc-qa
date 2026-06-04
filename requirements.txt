@@ -24,3 +24,4 @@ sentence-transformers>=2.3.0
 langchain-huggingface>=0.1.0
 rank-bm25>=0.2.0
 jieba>=0.42.1
+ddgs>=9.0.0

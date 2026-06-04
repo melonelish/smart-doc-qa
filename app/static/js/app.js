@@ -31,6 +31,7 @@ const DOMAINS = {
       { icon: '📈', label: '数值查询', desc: '智能区分数值类与概念类问题' },
       { icon: '🔄', label: '多文档对比', desc: '自动关联多份文档，生成对比分析表格' },
       { icon: '⚡', label: '趋势检测', desc: '跨文档/跨时期自动标注变化方向与异常值' },
+      { icon: '🤖', label: 'Agent 自主决策', desc: '自动判断是否需要联网搜索或精确计算' },
     ],
   },
   research: {
@@ -1281,7 +1282,7 @@ async function sendMessage() {
     var decoder = new TextDecoder();
     var buffer = '';
     var fullText = '';
-    var metaData = { sources: [] };
+    var metaData = { sources: [], toolLog: [] };
 
     var streamMsg = document.createElement('div');
     streamMsg.className = 'message assistant streaming';
@@ -1308,6 +1309,7 @@ async function sendMessage() {
           if (evt.type === 'meta') {
             if (evt.conversation_id) conversationId = evt.conversation_id;
             metaData.sources = (evt.source_details || []).map(function(s) { return s.source; });
+            metaData.toolLog = evt.tool_log || [];
           } else if (evt.type === 'token') {
             fullText += evt.text;
             if (streamBubble) streamBubble.textContent = fullText;
@@ -1337,6 +1339,25 @@ async function sendMessage() {
         });
         sd.innerHTML = sHtml;
         streamBubble.appendChild(sd);
+      }
+      if (metaData.toolLog && metaData.toolLog.length > 0) {
+        var toolIcons = { calculator: '🧮', web_search: '🌐' };
+        var toolNames = { calculator: '计算器', web_search: '联网搜索' };
+        var td = document.createElement('div');
+        td.className = 'message-sources';
+        td.style.borderLeftColor = '#8b5cf6';
+        var tHtml = '<div style="font-weight:500;margin-bottom:6px;">🔧 Agent 工具调用：</div>';
+        metaData.toolLog.forEach(function(t, i) {
+          var icon = toolIcons[t.tool] || '⚙️';
+          var name = toolNames[t.tool] || t.tool;
+          var argsStr = Object.values(t.args || {}).join(', ');
+          var resultPreview = (t.result || '').substring(0, 120);
+          if ((t.result || '').length > 120) resultPreview += '...';
+          tHtml += '<div class="source-line" style="margin-bottom:4px;"><span class="source-num">' + icon + '</span><span class="source-tag" style="font-weight:500;">' + name + '(' + escapeHtml(argsStr) + ')</span></div>';
+          tHtml += '<div style="font-size:12px;opacity:0.7;margin:0 0 6px 22px;color:#9ca3af;">→ ' + escapeHtml(resultPreview) + '</div>';
+        });
+        td.innerHTML = tHtml;
+        streamBubble.appendChild(td);
       }
     }
     chatMessages.scrollTop = chatMessages.scrollHeight;

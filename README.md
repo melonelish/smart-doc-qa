@@ -5,7 +5,7 @@
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-0.115+-009688.svg?style=flat-square" alt="FastAPI"></a>
   <a href="https://www.langchain.com/"><img src="https://img.shields.io/badge/LangChain-1.3+-green.svg?style=flat-square" alt="LangChain"></a>
   <a href="https://github.com/facebookresearch/faiss"><img src="https://img.shields.io/badge/FAISS-1.14+-orange.svg?style=flat-square" alt="FAISS"></a>
-  <img src="https://img.shields.io/badge/Release-v2.2-brightgreen.svg?style=flat-square" alt="v2.2">
+  <img src="https://img.shields.io/badge/Release-v2.5-brightgreen.svg?style=flat-square" alt="v2.5">
   <a href="https://github.com/melonskin/smart-doc-qa/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License"></a>
   <a href="https://github.com/melonskin/smart-doc-qa"><img src="https://img.shields.io/github/stars/melonskin/smart-doc-qa?style=flat-square&label=Stars" alt="Stars"></a>
 </p>
@@ -41,6 +41,8 @@ SmartDocQA 是基于 **领域驱动架构** 的智能文档问答系统。支持
 | 🔌 **RESTful API** | FastAPI with auto-generated Swagger docs |
 | 💾 **Local Embeddings** | Supports local TF-IDF vectorization, no external API required |
 | 🧠 **Hybrid Search** | FAISS vector search + BM25 keyword search + RRF fusion |
+| 🔄 **Cross-Document Comparison** | Auto-detect comparison queries, group by document, structured tables |
+| 🤖 **Agent Tools** | LLM-driven function calling: calculator for precise math, web search for real-time info |
 
 ---
 
@@ -71,6 +73,7 @@ SmartDocQA 是基于 **领域驱动架构** 的智能文档问答系统。支持
 │  │  • Vector Embedding (Local TF-IDF / OpenAI)   │  │
 │  │  • FAISS Vector Store + BM25 Keyword Search   │  │
 │  │  • RRF Fusion + Cross-Encoder Rerank          │  │
+│  │  • Agent Loop (Tool Calling → Execute → LLM)  │  │
 │  │  • LLM Chain (RAG)                           │  │
 │  └──────────────────┬────────────────────────────┘  │
 └─────────────────────┼───────────────────────────────┘
@@ -85,9 +88,24 @@ SmartDocQA 是基于 **领域驱动架构** 的智能文档问答系统。支持
 ```
 Indexing:  Document → Text Splitter → Chunks → Embedding → FAISS Index + BM25 Index
                                                               ↓
-Query:     Question → Embedding → FAISS Search ──┐
-                        ↓                         ├─→ RRF Fusion → Rerank → LLM → Answer
-                  BM25 Keyword Search ────────────┘
+Query:     Question → Query Type Detection ──────────────────┐
+                        ↓                                     │
+              ┌─────────┴─────────┐                          │
+              │ numeric/semantic/ │                          │
+              │   comparison      │                          │
+              └─────────┬─────────┘                          │
+                        ↓                                     │
+              FAISS Search ───────────────────────────────────┤
+                        ↓                                     │
+              BM25 Keyword Search ────────────────────────────┤
+                        ↓                                     │
+                  RRF Fusion → Rerank ────────────────────────┤
+                                                              │
+              Agent Loop (optional): ─────────────────────────┤
+              LLM → tool_call? → calculator/web_search → LLM  │
+                                                              │
+                        ↓                                     │
+                    Final Answer + Sources + Tool Log ────────┘
 ```
 
 ---
@@ -327,6 +345,8 @@ Each domain has **completely isolated knowledge bases** — documents, conversat
    ```
    User Question
         ↓
+   Query Type Detection (numeric / semantic / comparison)
+        ↓
    ┌── Embedding → FAISS Vector Search (top 10)
    └── BM25 Keyword Search (top 10)
         ↓
@@ -334,12 +354,39 @@ Each domain has **completely isolated knowledge bases** — documents, conversat
         ↓
    Cross-Encoder Reranker → Re-rank top 5
         ↓
-   LLM Generation → Answer + Source Citations
+   Agent Loop: LLM → tool_call? → calculator / web_search → LLM
+        ↓
+   LLM Generation → Answer + Source Citations + Tool Log
    ```
 
 This architecture addresses two major LLM pain points:
 - **Knowledge Cutoff**: Augments the model with uploaded documents
 - **Hallucination**: Answers grounded in real document content with source attribution
+
+---
+
+## 📋 v2.5 Changelog | 更新日志
+
+### 🚀 New Features
+- **Agent Tools (Function Calling)** — LLM 自主决策调用工具
+  - `calculator(expression)` — 精确计算数值表达式（安全 AST 求值，避免 LLM 推算错误）
+  - `web_search(query)` — 联网搜索补充文档外信息（基于 DuckDuckGo，免费无需 API Key）
+  - Agent Loop: LLM → tool_call → execute → feed back → LLM（最多 3 轮）
+- **Cross-Document Comparison** — 跨文档对比分析
+  - 自动检测对比类问题（对比/比较/差异/趋势/各份/版本）
+  - 检索结果按 `document_name` 分组展示
+  - 注入对比格式指令，输出结构化对比表格
+- **Query Type 三分类** — 新增 `comparison` 类型，优先于 `numeric` 检测
+- **Agent 调用可视化** — 前端展示工具调用过程（工具名、参数、结果）
+
+### 🔧 Improvements
+- 企业助手系统提示词新增「多文档对比」规则（第8条）
+- retrieval_method 标签支持 `+ agent`、`+ comparison`、`+ tables`
+- 前端企业助手能力卡片新增 Agent 自主决策、多文档对比、趋势检测
+- 清理所有调试日志代码（`_debug_*.txt`）
+
+### 📦 Dependencies
+- 新增 `ddgs>=9.0.0`（DuckDuckGo 搜索）
 
 ---
 

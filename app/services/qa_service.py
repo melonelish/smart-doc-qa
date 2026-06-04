@@ -55,6 +55,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import get_settings
 from app.services.structured_store import load_tables, save_tables, search_tables
+from app.services.agent_tools import AGENT_TOOLS, execute_tool
 
 settings = get_settings()
 
@@ -525,6 +526,16 @@ def load_and_split_document(file_path: str) -> List[Document]:
 # ═══════════════════════════════════════════════════════════
 
 
+def _strip_tool_markup(text: str) -> str:
+    """Remove DeepSeek DSML tool_call markup from the final answer."""
+    import re
+    text = re.sub(r'<｜｜DSML｜｜[^>]*>.*?</｜｜DSML｜｜[^>]*>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<｜｜DSML｜｜[^>]*>', '', text)
+    text = re.sub(r'</｜｜DSML｜｜[^>]*>', '', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 class QAService:
     """
     Smart document Q&A service.
@@ -664,6 +675,133 @@ class QAService:
             delta = chunk.choices[0].delta
             if delta.content:
                 yield delta.content
+
+    @staticmethod
+    def llm_chat_with_tools(
+        system: str,
+        messages: list,
+        tools: list | None = None,
+        tool_choice: str = "auto",
+        temperature: float = 0.3,
+    ) -> dict:
+        """Call LLM with optional function calling support.
+
+        Returns dict with keys:
+            - "content": str | None  (text answer, if any)
+            - "tool_calls": list[dict]  (tool calls to execute, if any)
+            - "usage": dict  (token usage)
+        """
+        client = get_llm_client()
+        full_messages = [{"role": "system", "content": system}] + messages
+        kwargs = dict(
+            model=settings.openai_model,
+            messages=full_messages,
+            temperature=temperature,
+        )
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = tool_choice
+
+        resp = client.chat.completions.create(**kwargs)
+        msg = resp.choices[0].message
+
+        tool_calls = []
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                tool_calls.append({
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": __import__("json").loads(tc.function.arguments),
+                })
+
+        return {
+            "content": msg.content,
+            "tool_calls": tool_calls,
+            "usage": {
+                "prompt_tokens": resp.usage.prompt_tokens if resp.usage else 0,
+                "completion_tokens": resp.usage.completion_tokens if resp.usage else 0,
+            },
+        }
+
+    def run_agent_loop(
+        self,
+        system: str,
+        user_message: str,
+        max_tool_rounds: int = 3,
+    ) -> tuple[str, list]:
+        """Agent loop: LLM decides tools → execute → feed back → repeat.
+
+        Returns:
+            (final_answer, tool_log)
+            tool_log is a list of dicts: [{"tool": name, "args": {...}, "result": "..."}]
+        """
+        import json as _json
+
+        messages = [{"role": "user", "content": user_message}]
+        tool_log = []
+
+        for round_idx in range(max_tool_rounds):
+            result = self.llm_chat_with_tools(
+                system=system,
+                messages=messages,
+                tools=AGENT_TOOLS,
+            )
+
+            if not result["tool_calls"]:
+                final_answer = result["content"] or ""
+                return final_answer, tool_log
+
+            messages.append({
+                "role": "assistant",
+                "content": result["content"],
+                "tool_calls": [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": _json.dumps(tc["arguments"], ensure_ascii=False),
+                        },
+                    }
+                    for tc in result["tool_calls"]
+                ],
+            })
+
+            for tc in result["tool_calls"]:
+                tool_name = tc["name"]
+                tool_args = tc["arguments"]
+                tool_result = execute_tool(tool_name, tool_args)
+                tool_log.append({
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result": tool_result,
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": tool_result,
+                })
+
+        tool_summary = "\n".join(
+            f"- {t['tool']}({t['args']}) → {t['result'][:300]}"
+            for t in tool_log
+        )
+        messages.append({
+            "role": "user",
+            "content": (
+                f"你已经完成了工具调用。以下是工具返回的结果摘要：\n\n{tool_summary}\n\n"
+                "请基于以上工具结果和检索到的文档内容，直接给出最终答案。不要再调用任何工具。"
+                "直接用中文回答，不要输出任何工具调用标记。"
+            ),
+        })
+        final_resp = self.llm_chat_with_tools(
+            system=system + "\n\n【重要】你现在必须直接输出最终答案文本，不要输出任何工具调用标记（如tool_calls、DSML标签等）。直接回答用户的问题。",
+            messages=messages,
+            tools=None,
+        )
+        answer = final_resp["content"] or ""
+        answer = _strip_tool_markup(answer)
+        return answer, tool_log
 
     def _format_answer(self, text: str) -> str:
         """Post-process LLM answer: strip markdown, normalize readability.
@@ -1064,9 +1202,12 @@ class QAService:
             f"{comparison_instruction}"
         )
 
-        # ── 4) LLM generation ──
-        answer = self.llm_chat(get_domain_prompt(_domain), user_message)
-        answer = self._format_answer(answer)
+        # ── 4) Agent loop: LLM + tools ──
+        agent_answer, tool_log = self.run_agent_loop(
+            system=get_domain_prompt(_domain),
+            user_message=user_message,
+        )
+        answer = self._format_answer(agent_answer)
 
         convo_id = conversation_id or str(uuid.uuid4())
         conversation_memory.add_turn(
@@ -1088,6 +1229,8 @@ class QAService:
             else "vector + rerank" if use_rerank
             else "vector"
         )
+        if tool_log:
+            retrieve_method += " + agent"
         if qtype == "comparison" and len(source_details) >= 2:
             retrieve_method += " + comparison"
         elif table_context:
@@ -1105,6 +1248,7 @@ class QAService:
             "source_count": len(final_docs),
             "retrieval_method": retrieve_method,
             "kb_id": kb_id,
+            "tool_log": tool_log,
         }
 
         return result

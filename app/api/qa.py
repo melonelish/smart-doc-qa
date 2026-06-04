@@ -76,6 +76,12 @@ class SourceDetail(BaseModel):
     chunks: list[SourceChunk]
 
 
+class ToolLogEntry(BaseModel):
+    tool: str
+    args: dict
+    result: str
+
+
 class QuestionResponse(BaseModel):
     question: str
     conversation_id: str
@@ -84,6 +90,7 @@ class QuestionResponse(BaseModel):
     source_details: list[SourceDetail]
     source_count: int
     retrieval_method: str
+    tool_log: list[ToolLogEntry] = []
 
 
 @router.post("/ask", response_model=QuestionResponse)
@@ -174,7 +181,7 @@ async def ask_question_stream(request: QuestionRequest, db: Session = Depends(ge
         sources = result.get("sources", [])
         source_details = result.get("source_details", [])
 
-        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conv_id, 'sources': sources, 'source_details': source_details, 'retrieval_method': result.get('retrieval_method', ''), 'source_count': result.get('source_count', 0)}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conv_id, 'sources': sources, 'source_details': source_details, 'retrieval_method': result.get('retrieval_method', ''), 'source_count': result.get('source_count', 0), 'tool_log': result.get('tool_log', [])}, ensure_ascii=False)}\n\n"
 
         answer = result.get("answer", "")
         for char in answer:

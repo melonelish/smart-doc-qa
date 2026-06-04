@@ -64,3 +64,11 @@ test_docs/
 
 # 运行日志
 *.pid
+
+# 临时脚本
+restart_server.py
+run_server.py
+run_server2.py
+test_header.py
+server_log*.txt
+server_pid*.txt
