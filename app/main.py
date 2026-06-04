@@ -20,12 +20,6 @@ from app.services.progress_ws import progress_tracker
 
 settings = get_settings()
 
-# ── Debug: write vector_store_path to a file ──
-try:
-    with open("_debug_path.txt", "w") as _f:
-        _f.write(repr(settings.vector_store_path) + "\n")
-except Exception:
-    pass
 
 STATIC_DIR = Path(__file__).parent / "static"
 

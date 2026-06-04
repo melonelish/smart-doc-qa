@@ -72,7 +72,11 @@ DOMAIN_PROMPTS = {
         "4. 【专业规范】用词正式、条理清晰，符合企业文档的表述风格。\n"
         "5. 【实事求是】如果文档中没有相关信息，如实告知，不要编造。\n"
         "6. 【表格数据】如果提供了表格数据（如季度报表、统计表），优先从表格中提取精确数字回答，且要标注对应的行和列信息以表明数据来源。\n"
-        "7. 【趋势分析】如果提供多个时期的表格数据，自动做趋势比较，用↑/↓/→标记变化方向，并提示异常值。\n\n"
+        "7. 【趋势分析】如果提供多个时期的表格数据，自动做趋势比较，用↑/↓/→标记变化方向，并提示异常值。\n"
+        "8. 【多文档对比】如果提供了多份文档的内容(如多份季度报表、多个版本方案、多个合同)，且问题涉及对比/差异/趋势看变化：\n"
+        "   - 先按文档分别提取关键数据或条款\n"
+        "   - 再用对比表格逐项列出各文档的异同，每行一个对比维度，每列一个文档\n"
+        "   - 最后给出综合结论，明确指出各文档之间的关键差异和共性\n\n"
         "企业文档类型说明：\n"
         "- 员工手册/公司制度：涉及考勤、薪酬、绩效、休假、报销等规定\n"
         "- 技术文档：API文档、架构设计、运维手册、开发规范\n"
@@ -302,26 +306,65 @@ _NUMERIC_PATTERNS = [
     "数字", "数据", "统计", "数字是多少",
 ]
 
+_COMPARISON_PATTERNS = [
+    # Single-document perspective shifts
+    "对比", "比较", "差异", "区别", "不同",
+    # Cross-period
+    "趋势", "变化", "走势", "波动", "变动",
+    # Cross-document
+    "各份", "各文档", "各文件", "所有文档", "全部文档",
+    # Explicit separators (handled in function body)
+]
+
 
 def detect_query_type(question: str) -> str:
     """
-    Classify a user question as ``"numeric"`` or ``"semantic"``.
+    Classify a user question as ``"comparison"``, ``"numeric"`` or ``"semantic"``.
 
-    ``"numeric"``  — questions that ask for specific numbers, rankings,
-                      comparisons, or table-contained data.
-    ``"semantic"`` — conceptual / explanatory questions answered by
-                      general text retrieval.
+    ``"comparison"`` — questions asking to compare/contrast across multiple
+                       documents, periods, or versions (e.g. "对比三份报表",
+                       "Q1和Q2的趋势有什么不同").
+    ``"numeric"``    — questions that ask for specific numbers, rankings,
+                       or table-contained data.
+    ``"semantic"``   — conceptual / explanatory questions answered by
+                       general text retrieval.
     """
     q = question.strip().lower()
+
+    # 1) Check comparison — do this first so "对比Q1和Q2的利润" stays comparison
+    for pat in _COMPARISON_PATTERNS:
+        if pat in q:
+            return "comparison"
+
+    # Explicit cross-entity separators that often indicate comparison
+    if any(sep in q for sep in [" vs ", " versus ", " 和 ", "与"]):
+        # "Q1和Q2的利润" is comparison; "spring和springboot区别" is also comparison
+        return "comparison"
+
+    # 2) Then numeric
     for pat in _NUMERIC_PATTERNS:
         if pat in q:
             return "numeric"
 
-    # Check for explicit comparison between two entities
-    if any(sep in q for sep in [" vs ", " versus ", " 和 ", "与", "对比", "区别", "差异"]):
-        return "numeric"
+    # 3) Check for comparison between two entities (words like 对比/区别/差异 already
+    #    caught above; here catch pairs like "Q1, Q2, Q3")
+    if _looks_like_multi_doc_comparison(q):
+        return "comparison"
 
     return "semantic"
+
+
+def _looks_like_multi_doc_comparison(q: str) -> bool:
+    """Heuristic: question mentions 2+ named periods / versions / documents."""
+    # Count periods (Q1/Q2/Q3, 一季度/二季度, 1月/2月, etc.)
+    period_count = 0
+    for kw in ["q1", "q2", "q3", "q4", "一季度", "二季度", "三季度", "四季度",
+               "1月", "2月", "3月", "4月", "5月", "6月",
+               "7月", "8月", "9月", "10月", "11月", "12月",
+               "版本", "v1", "v2", "v3", "第一版", "第二版"]:
+        if kw in q:
+            period_count += 1
+    return period_count >= 2
 
 
 # ═══════════════════════════════════════════════════════════
@@ -536,12 +579,6 @@ class QAService:
         """Load FAISS index. Returns None if missing."""
         vector_store_dir = Path(settings.vector_store_path) / vector_store_name
         idx_path = vector_store_dir / "index.faiss"
-        # ── Debug ──
-        try:
-            with open("_debug_load.txt", "a") as _f:
-                _f.write(f"name={vector_store_name} dir={vector_store_dir} idx_exists={idx_path.exists()} vector_path={repr(settings.vector_store_path)}\n")
-        except Exception:
-            pass
         if not idx_path.exists():
             return None
         embeddings = get_embeddings()
@@ -554,11 +591,6 @@ class QAService:
         except Exception as e:
             import traceback
             err = traceback.format_exc()
-            try:
-                with open("_debug_faiss_error.txt", "a") as _f:
-                    _f.write(f"FAISS load error for {vector_store_name}:\n{err}\n")
-            except Exception:
-                pass
             # Dimension mismatch → old vector store, needs reprocessing
             raise RuntimeError(
                 f"无法加载向量库 '{vector_store_name}'，可能是旧版本创建的。"
@@ -843,17 +875,6 @@ class QAService:
         """Retrieve from a knowledge base (multi-document FAISS index)."""
         kb_store_name = f"kb_{kb_id}"
 
-        # ── Debug log ──
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"--- ask_question_by_kb called for kb_id={kb_id} ---\n")
-                _f.write(f"  settings.vector_store_path: {repr(settings.vector_store_path)}\n")
-                _f.write(f"  kb_store_name: {kb_store_name}\n")
-                _f.write(f"  store_dir: {str(Path(settings.vector_store_path) / kb_store_name)}\n")
-                _f.write(f"  store_dir exists: {(Path(settings.vector_store_path) / kb_store_name).exists()}\n")
-        except Exception:
-            pass
-
         # Look up KB domain
         _domain = "enterprise"
         try:
@@ -905,21 +926,7 @@ class QAService:
                 )
 
         # ── 2) Text retrieval (FAISS + BM25 → RRF → Rerank) ──────
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"  about to call load_vector_store for {kb_store_name}...\n")
-        except Exception:
-            pass
-
         vector_store = self.load_vector_store(kb_store_name)
-
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"  load_vector_store returned: {'not None' if vector_store is not None else 'None'}\n")
-                if vector_store is not None:
-                    _f.write(f"  type(vector_store): {type(vector_store).__name__}\n")
-        except Exception:
-            pass
 
         if vector_store is None:
             from app.db.database import SessionLocal
@@ -931,126 +938,40 @@ class QAService:
                 db.close()
             vector_store = self.load_vector_store(kb_store_name)
             if vector_store is None:
-                try:
-                    with open("_debug_askkb.txt", "a") as _f:
-                        _f.write(f"  FAILED: vector_store still None, raising ValueError\n")
-                except Exception:
-                    pass
                 raise ValueError(f"Knowledge base index not found: {kb_id}")
 
         candidates = None
-        actual_hybrid = use_hybrid
-        
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"  about to retrieve...\n")
-        except Exception:
-            pass
-        
+
         if use_hybrid:
-            try:
-                with open("_debug_askkb.txt", "a") as _f:
-                    _f.write(f"  using hybrid search...\n")
-            except Exception:
-                pass
-            
             all_chunks = self._load_chunks(kb_store_name)
-            try:
-                with open("_debug_askkb.txt", "a") as _f:
-                    _f.write(f"  loaded chunks: {len(all_chunks) if all_chunks else 0}\n")
-            except Exception:
-                pass
-            
             if all_chunks:
                 bm25 = BM25Retriever(all_chunks)
                 bm25_results = bm25.search(question, k=top_k * 5)
-                try:
-                    with open("_debug_askkb.txt", "a") as _f:
-                        _f.write(f"  BM25 results: {len(bm25_results)}\n")
-                except Exception:
-                    pass
             else:
                 bm25_results = []
-            
+
             faiss_results = vector_store.similarity_search_with_score(
                 question, k=top_k * 5
             )
-            try:
-                with open("_debug_askkb.txt", "a") as _f:
-                    _f.write(f"  FAISS results: {len(faiss_results)}\n")
-            except Exception:
-                pass
-            
             candidates = _rrf_fusion(faiss_results, bm25_results, k=60)
-        
+
         if candidates is None:
             candidates = vector_store.similarity_search_with_score(
                 question, k=top_k * 5
             )
 
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"  total candidates: {len(candidates)}\n")
-        except Exception:
-            pass
-
         if not candidates:
-            try:
-                with open("_debug_askkb.txt", "a") as _f:
-                    _f.write(f"  FAILED: no candidates, raising ValueError\n")
-            except Exception:
-                pass
             raise ValueError("No relevant document passages found")
 
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"  about to rerank...\n")
-        except Exception:
-            pass
-        
         if use_rerank and len(candidates) > top_k:
             pool = candidates[: min(top_k * 3, len(candidates))]
-            try:
-                with open("_debug_askkb.txt", "a") as _f:
-                    _f.write(f"  calling rerank...\n")
-            except Exception:
-                pass
             final_docs = _rerank(question, pool, top_k=top_k)
-            try:
-                with open("_debug_askkb.txt", "a") as _f:
-                    _f.write(f"  rerank done, final_docs: {len(final_docs)}\n")
-            except Exception:
-                pass
         else:
             final_docs = [doc for doc, _ in candidates[:top_k]]
-            try:
-                with open("_debug_askkb.txt", "a") as _f:
-                    _f.write(f"  no rerank, final_docs: {len(final_docs)}\n")
-            except Exception:
-                pass
-        
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"  proceeding to build context...\n")
-        except Exception:
-            pass
-
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"  iterating over final_docs ({len(final_docs)} items)...\n")
-        except Exception:
-            pass
-        
         context_parts = []
         source_details = __import__('collections').OrderedDict()
 
         for i, doc in enumerate(final_docs):
-            try:
-                with open("_debug_askkb.txt", "a") as _f:
-                    _f.write(f"    processing doc {i + 1}...\n")
-            except Exception:
-                pass
-            
             source = doc.metadata.get("source", "Unknown")
             page = str(doc.metadata.get("page") or "")
             chunk_idx = doc.metadata.get("chunk", i)
@@ -1072,12 +993,6 @@ class QAService:
                     else doc.page_content
                 ),
             })
-        
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"  building final context...\n")
-        except Exception:
-            pass
 
         sep = "\n\n" + "=" * 60 + "\n\n"
         context = sep.join(context_parts)
@@ -1098,13 +1013,55 @@ class QAService:
                     + "\n\n" + "=" * 60 + "\n\n"
                 )
 
+        # ── Comparison mode: re-group context by document ────────────
+        if qtype == "comparison" and len(source_details) >= 2:
+            doc_groups = __import__('collections').OrderedDict()
+            for i, doc in enumerate(final_docs):
+                doc_name = doc.metadata.get("document_name",
+                                             doc.metadata.get("source", "Unknown"))
+                page = str(doc.metadata.get("page") or "")
+                if doc_name not in doc_groups:
+                    doc_groups[doc_name] = []
+                snippet = doc.page_content
+                if page:
+                    doc_groups[doc_name].append(f"[Page {page}]\n{snippet}")
+                else:
+                    doc_groups[doc_name].append(snippet)
+
+            grouped_parts = []
+            for doc_name, snippets in doc_groups.items():
+                grouped_parts.append(
+                    f"### Document: {doc_name}\n\n" + "\n\n".join(snippets)
+                )
+            comparison_context = "\n\n".join(grouped_parts)
+            context = (
+                "\n\n"
+                "Note: The user is asking a cross-document comparison question. "
+                "Below are passages grouped by source document.\n\n"
+                + comparison_context
+                + "\n\n"
+            )
+            context_label = "## Document Passages (grouped by document)\n"
+            comparison_instruction = (
+                "\n\n## Comparison Instruction\n\n"
+                "This is a comparison question. Extract relevant data from each document "
+                "and present a structured comparison. Use a table format where:\n"
+                "- Each row = a comparison dimension (e.g. revenue, profit margin, penalty clause)\n"
+                "- Each column = a document\n"
+                "Then give a summary conclusion highlighting key differences and commonalities."
+            )
+        else:
+            context_label = f"## Document Fragments (total {len(final_docs)})\n"
+            comparison_instruction = ""
+
         user_message = (
             f"{history_text}"
-            f"{table_context}"  # <-- table data injected here for numeric queries
-            f"## Document Fragments (total {len(final_docs)})\n"
+            f"{table_context}"
+            f"{context_label}"
             f"{context}\n\n"
             f"## Current Question\n\n"
             f"{question}"
+            f"{comparison_instruction}"
         )
 
         # ── 4) LLM generation ──
@@ -1131,7 +1088,9 @@ class QAService:
             else "vector + rerank" if use_rerank
             else "vector"
         )
-        if table_context:
+        if qtype == "comparison" and len(source_details) >= 2:
+            retrieve_method += " + comparison"
+        elif table_context:
             retrieve_method += " + tables"
 
         result = {
@@ -1147,12 +1106,6 @@ class QAService:
             "retrieval_method": retrieve_method,
             "kb_id": kb_id,
         }
-        
-        try:
-            with open("_debug_askkb.txt", "a") as _f:
-                _f.write(f"  returning answer successfully!\n")
-        except Exception:
-            pass
-        
+
         return result
 

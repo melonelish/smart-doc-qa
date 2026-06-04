@@ -124,22 +124,10 @@ async def ask_question(
         )
         return QuestionResponse(**result)
     except ValueError as e:
-        try:
-            with open("_debug_qa_error.txt", "a") as _f:
-                _f.write(f"ValueError in ask_question: {e}\n")
-        except Exception:
-            pass
         raise VectorStoreNotFoundError(target_id)
     except RuntimeError as e:
         raise QAError(str(e))
     except Exception as e:
-        try:
-            with open("_debug_qa_error.txt", "a") as _f:
-                _f.write(f"Exception in ask_question: {type(e).__name__}: {e}\n")
-                import traceback
-                _f.write(traceback.format_exc() + "\n")
-        except Exception:
-            pass
         raise QAError(str(e))
 
 
