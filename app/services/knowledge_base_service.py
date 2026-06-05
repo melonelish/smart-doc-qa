@@ -3,9 +3,11 @@
 import shutil
 import pickle
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
+
+import logging
 
 from app.core.config import get_settings
 from app.models.document import (
@@ -13,6 +15,7 @@ from app.models.document import (
 )
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeBaseService:
@@ -53,7 +56,7 @@ class KnowledgeBaseService:
             kb.name = name
         if description is not None:
             kb.description = description
-        kb.updated_at = datetime.utcnow()
+        kb.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(kb)
         return kb
@@ -166,7 +169,7 @@ class KnowledgeBaseService:
                     chunk.metadata["document_name"] = doc.filename
                 all_chunks.extend(chunks)
             except Exception as e:
-                print(f"[kb] Warning: failed to load doc {doc_id}: {e}")
+                logger.warning("Failed to load doc %s for KB index: %s", doc_id, e)
                 continue
 
         if not all_chunks:
@@ -174,6 +177,8 @@ class KnowledgeBaseService:
 
         kb_store_name = f"kb_{kb_id}"
         qa = QAService()
+        # Delete old vector store before rebuilding to avoid incremental append
+        qa.delete_vector_store(kb_store_name)
         store_dir = qa.create_vector_store(all_chunks, kb_store_name)
         # Extract tables per-document and merge into KB store
         for doc_id in doc_ids:

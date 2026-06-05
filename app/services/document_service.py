@@ -1,5 +1,6 @@
+import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -9,6 +10,7 @@ from app.core.config import get_settings
 from app.models.document import Document, DocumentStatus
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 UPLOAD_DIR = _PROJECT_ROOT / "data" / "uploads"
@@ -41,8 +43,8 @@ class DocumentService:
             file_type=file_type,
             file_size=file_size,
             status=DocumentStatus.UPLOADED,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
         )
         db.add(doc)
         db.commit()
@@ -76,7 +78,7 @@ class DocumentService:
         doc.status = status
         doc.chunk_count = chunk_count
         doc.error_message = error_message
-        doc.updated_at = datetime.utcnow()
+        doc.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(doc)
         return doc

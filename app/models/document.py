@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Integer, DateTime, Text, Enum as SQLEnum
 from app.db.database import Base
 import enum
@@ -29,7 +29,7 @@ class ConversationRecord(Base):
     content = Column(Text, nullable=False, comment="Message content")
     sources = Column(Text, nullable=True, comment="Source references (JSON)")
     created_at = Column(
-        DateTime, default=datetime.utcnow, comment="Creation time"
+        DateTime, default=lambda: datetime.now(timezone.utc), comment="Creation time"
     )
 
 
@@ -49,9 +49,10 @@ class Document(Base):
     )
     chunk_count = Column(Integer, default=0, comment="Number of text chunks")
     error_message = Column(Text, nullable=True, comment="Error message")
-    created_at = Column(DateTime, default=datetime.utcnow, comment="Creation time")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), comment="Creation time")
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="Last update time"
+        DateTime, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), comment="Last update time"
     )
 
 
@@ -63,9 +64,10 @@ class KnowledgeBase(Base):
     name = Column(String(200), nullable=False, comment="Knowledge base name")
     description = Column(Text, nullable=True, comment="Knowledge base description")
     domain = Column(String(50), default='enterprise', comment="Domain category: enterprise / research / legal")
-    created_at = Column(DateTime, default=datetime.utcnow, comment="Creation time")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), comment="Creation time")
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="Last update time"
+        DateTime, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), comment="Last update time"
     )
 
 
@@ -76,4 +78,4 @@ class KnowledgeBaseDocument(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     kb_id = Column(String(36), nullable=False, index=True, comment="Knowledge base ID")
     doc_id = Column(String(36), nullable=False, index=True, comment="Document ID")
-    added_at = Column(DateTime, default=datetime.utcnow, comment="When document was added")
+    added_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), comment="When document was added")

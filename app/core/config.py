@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from functools import lru_cache
 from pydantic_settings import BaseSettings
@@ -37,6 +38,10 @@ class Settings(BaseSettings):
     max_file_size_mb: int = 10
     chunk_size: int = 1000
     chunk_overlap: int = 200
+
+    # Logging
+    log_level: str = "INFO"
+    log_dir: str = ""
 
     @property
     def database_url(self) -> str:

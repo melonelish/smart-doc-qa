@@ -33,9 +33,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# ── HuggingFace mirror MUST be set BEFORE HF-lib imports ──
-# Read HF_ENDPOINT from .env manually so it's in os.environ
-# before huggingface_hub / transformers cache their default endpoint.
+# ── HuggingFace OFFLINE must be set BEFORE any HF-lib imports ──
+# Use direct assignment (NOT setdefault) to force offline mode.
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+if "HF_ENDPOINT" not in os.environ:
+    os.environ["HF_ENDPOINT"] = "https://huggingface.co"
+
+# Read HF_ENDPOINT from .env (if present) so mirrors work offline
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".env")
 if os.path.isfile(_env_path):
     with open(_env_path, encoding="utf-8") as _f:
@@ -144,10 +149,16 @@ def get_domain_prompt(domain: str) -> str:
 _llm_client: Optional[OpenAI] = None
 
 
-def get_llm_client() -> OpenAI:
+def get_llm_client() -> "OpenAI":
     """Module-level singleton — create once, reuse across all requests."""
     global _llm_client
     if _llm_client is None:
+        if not settings.openai_api_key:
+            from app.exceptions import ConfigurationError
+            raise ConfigurationError(
+                "未配置 OPENAI_API_KEY，请在 .env 文件中设置后再使用问答功能。"
+                "参考: https://platform.deepseek.com/"
+            )
         print(f"[llm] Creating OpenAI client → {settings.openai_base_url} model={settings.openai_model}")
         _llm_client = OpenAI(
             api_key=settings.openai_api_key,
@@ -169,10 +180,15 @@ def get_embeddings() -> HuggingFaceEmbeddings:
     """Lazy singleton — load once, reuse across all queries."""
     global _embeddings_instance
     if _embeddings_instance is None:
-        print(f"[embed] Loading {settings.local_embedding_model} ... (first time, may download)")
+        # Prevent network requests when model is already cached locally.
+        # On networks where huggingface.co is unreachable, the default
+        # behaviour hangs for minutes retrying adapter_config.json etc.
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        print(f"[embed] Loading {settings.local_embedding_model} ... (first time)")
         _embeddings_instance = HuggingFaceEmbeddings(
             model_name=settings.local_embedding_model,
-            model_kwargs={"device": "cpu"},
+            model_kwargs={"device": "cpu", "local_files_only": True},
             encode_kwargs={
                 "normalize_embeddings": True,
                 "batch_size": 8,
@@ -190,24 +206,12 @@ _reranker_instance = None  # type: Optional[object]
 
 
 def get_reranker():
-    """Lazy singleton cross-encoder reranker."""
-    global _reranker_instance
-    if _reranker_instance is None:
-        try:
-            from sentence_transformers import CrossEncoder
-        except ImportError:
-            raise RuntimeError(
-                "sentence-transformers is required for reranking. "
-                "Run: pip install sentence-transformers"
-            )
-        print(f"[rerank] Loading {settings.reranker_model} ... (first time, may download)")
-        _reranker_instance = CrossEncoder(
-            settings.reranker_model,
-            max_length=512,
-            device="cpu",
-        )
-        print("[rerank] Model loaded OK")
-    return _reranker_instance
+    """Lazy singleton cross-encoder reranker.
+
+    Always returns None — sentence_transformers/multiprocessing
+    is unstable on Windows/Anaconda; reranking is skipped.
+    """
+    return None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -382,8 +386,11 @@ def _rerank(
     if not documents:
         return []
     docs = [doc for doc, _ in documents]
-    pairs = [[query, doc.page_content] for doc in docs]
     reranker = get_reranker()
+    if reranker is None:
+        # Reranker failed to load — skip reranking, return top docs as-is
+        return docs[:top_k]
+    pairs = [[query, doc.page_content] for doc in docs]
     scores = reranker.predict(
         pairs,
         show_progress_bar=False,
@@ -553,15 +560,26 @@ class QAService:
     def create_vector_store(
         chunks: List[Document], vector_store_name: str
     ) -> str:
-        """Create FAISS index and persist chunks for BM25 reconstruction."""
+        """Create or update FAISS index and persist chunks for BM25 reconstruction.
+
+        If the vector store already exists, new chunks are appended incrementally
+        instead of replacing the entire index.
+        """
+        if not chunks:
+            raise ValueError("No document chunks to index — file may be empty or contain no extractable text.")
+
         vector_store_dir = Path(settings.vector_store_path) / vector_store_name
-        if vector_store_dir.exists():
-            shutil.rmtree(vector_store_dir)
         vector_store_dir.mkdir(parents=True, exist_ok=True)
 
         embeddings = get_embeddings()
-        vector_store = FAISS.from_documents(chunks, embeddings)
-        vector_store.save_local(str(vector_store_dir))
+        existing = QAService.load_vector_store(vector_store_name)
+        if existing:
+            existing.add_documents(chunks)
+            existing.save_local(str(vector_store_dir))
+            vector_store = existing
+        else:
+            vector_store = FAISS.from_documents(chunks, embeddings)
+            vector_store.save_local(str(vector_store_dir))
 
         # Verify
         idx_path = vector_store_dir / "index.faiss"
@@ -571,10 +589,14 @@ class QAService:
                 f"Directory: {os.listdir(str(vector_store_dir))}"
             )
 
-        # Persist chunks for BM25 rebuild
+        # Persist chunks for BM25 rebuild — merge with existing if any
         chunks_path = vector_store_dir / "chunks.pkl"
+        all_chunks = list(chunks)
+        if chunks_path.exists():
+            with open(chunks_path, "rb") as f:
+                all_chunks = pickle.load(f) + all_chunks
         with open(chunks_path, "wb") as f:
-            pickle.dump(chunks, f)
+            pickle.dump(all_chunks, f)
 
         # Persist version marker
         version_path = vector_store_dir / "version.txt"
@@ -582,7 +604,8 @@ class QAService:
             f"model={settings.local_embedding_model}\n", encoding="utf-8"
         )
 
-        print(f"[vector] Created '{vector_store_name}' ({len(chunks)} chunks)")
+        action = "Updated" if existing else "Created"
+        print(f"[vector] {action} '{vector_store_name}' (total {len(all_chunks)} chunks)")
         return str(vector_store_dir)
 
     @staticmethod
@@ -697,12 +720,19 @@ class QAService:
             model=settings.openai_model,
             messages=full_messages,
             temperature=temperature,
+            max_tokens=2000,
+            timeout=settings.openai_timeout,
         )
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
 
+        print(f"[llm] calling {settings.openai_model} ...", flush=True)
+        import time as _t
+        _t0 = _t.time()
         resp = client.chat.completions.create(**kwargs)
+        _elapsed = _t.time() - _t0
+        print(f"[llm] response received ({_elapsed:.1f}s)", flush=True)
         msg = resp.choices[0].message
 
         tool_calls = []

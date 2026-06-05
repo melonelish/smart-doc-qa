@@ -1,8 +1,9 @@
-"""Knowledge Base API Router."""
+﻿"""Knowledge Base API Router."""
 
+import logging
 import os
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, List
@@ -19,9 +20,11 @@ from app.models.document import DocumentStatus
 from app.services.document_service import DocumentService, UPLOAD_DIR
 from app.services.knowledge_base_service import KnowledgeBaseService
 from app.services.qa_service import QAService, load_and_split_document
+from app.services.progress_ws import progress_tracker
 
 router = APIRouter(prefix="/api/v1/knowledge-bases", tags=["knowledge-bases"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class CreateKBRequest(BaseModel):
@@ -154,15 +157,103 @@ async def add_documents_to_kb(kb_id: str, req: AddDocsRequest, db: Session = Dep
 
 @router.delete("/{kb_id}/documents/{doc_id}")
 async def remove_document_from_kb(kb_id: str, doc_id: str, db: Session = Depends(get_db)):
+    # Verify KB exists
+    kb = KnowledgeBaseService.get(db, kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+    # Verify document exists and is in this KB
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
     ok = KnowledgeBaseService.remove_document(db, kb_id, doc_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Association not found")
+
+    # Rebuild vector store without the removed document
+    try:
+        KnowledgeBaseService.rebuild_kb_index(db, kb_id)
+    except ValueError:
+        # No remaining readable documents — remove the vector store
+        from app.services.qa_service import QAService
+        QAService.delete_vector_store(f"kb_{kb_id}")
     return {"message": "Document removed from knowledge base"}
 
 
+def _upload_to_kb_background(kb_id: str, doc_id: str, file_path: str, filename: str):
+    """Background task: process document into KB vector store."""
+    from app.db.database import SessionLocal
+    db = SessionLocal()
+    try:
+        doc = DocumentService.get_document(db, doc_id)
+        if not doc:
+            logger.warning("KB upload background: doc not found | doc_id=%s", doc_id)
+            return
+
+        DocumentService.update_document_status(db, doc, DocumentStatus.PROCESSING)
+        progress_tracker.set(doc_id, "正在加载文档...", 10)
+
+        chunks = load_and_split_document(file_path)
+        if not chunks:
+            raise ValueError("文档内容为空或无法提取文本")
+        progress_tracker.set(doc_id, "文本分割完成", 40)
+
+        for chunk in chunks:
+            chunk.metadata["document_id"] = doc.id
+            chunk.metadata["document_name"] = filename
+        kb_store_name = f"kb_{kb_id}"
+        qa = QAService()
+
+        # Pre-warm embeddings so the model-loading delay is visible in UI.
+        # On first call HuggingFaceEmbeddings loads the transformer from disk;
+        # without progress feedback the frontend appears frozen at 40%.
+        progress_tracker.set(doc_id, "正在加载 AI 模型...", 50)
+        from app.services.qa_service import get_embeddings
+        get_embeddings()
+        progress_tracker.set(doc_id, "AI 模型加载完成", 55)
+
+        progress_tracker.set(doc_id, "正在创建向量库...", 60)
+        qa.create_vector_store(chunks, kb_store_name)
+        qa.extract_and_store_tables(file_path, kb_store_name)
+        # Update doc_ids.txt
+        doc_ids_path = Path(settings.vector_store_path) / kb_store_name / "doc_ids.txt"
+        existing_ids = set()
+        if doc_ids_path.exists():
+            existing_ids = set(doc_ids_path.read_text(encoding="utf-8").split(","))
+        existing_ids.add(doc.id)
+        doc_ids_path.write_text(",".join(sorted(existing_ids)), encoding="utf-8")
+        DocumentService.update_document_status(
+            db, doc, DocumentStatus.READY, chunk_count=len(chunks)
+        )
+        progress_tracker.set(doc_id, "处理完成", 100)
+        logger.info("KB upload processed OK | kb_id=%s doc_id=%s chunks=%d",
+                     kb_id, doc_id, len(chunks))
+    except Exception as e:
+        logger.error("KB upload processing failed | kb_id=%s doc_id=%s error=%s",
+                      kb_id, doc_id, e)
+        progress_tracker.set(doc_id, f"处理失败: {e}", 0)
+        db.rollback()
+        try:
+            doc = DocumentService.get_document(db, doc_id)
+            if doc:
+                DocumentService.update_document_status(
+                    db, doc, DocumentStatus.FAILED, error_message=str(e)
+                )
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 @router.post("/{kb_id}/upload")
-async def upload_to_kb(kb_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Upload a file directly into a knowledge base, then auto-process."""
+async def upload_to_kb(
+    kb_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+):
+    """Upload a file directly into a knowledge base, then auto-process in background."""
     kb = KnowledgeBaseService.get(db, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
@@ -175,6 +266,8 @@ async def upload_to_kb(kb_id: str, file: UploadFile = File(...), db: Session = D
         raise FileTypeNotAllowedError(ext, settings.allowed_extensions)
 
     content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="空文件，不允许上传")
     if len(content) > settings.max_file_size_mb * 1024 * 1024:
         raise FileTooLargeError(
             len(content) / (1024 * 1024), settings.max_file_size_mb
@@ -183,7 +276,7 @@ async def upload_to_kb(kb_id: str, file: UploadFile = File(...), db: Session = D
 
     # Save file & create document record
     file_path_src, file_type, file_size = DocumentService.save_uploaded_file(file)
-    # Move to kb-scoped path so it isn't dangling if KB is deleted
+    # Move to kb-scoped path
     kb_dir = UPLOAD_DIR / "kb" / kb_id
     kb_dir.mkdir(parents=True, exist_ok=True)
     dest = kb_dir / file.filename
@@ -199,33 +292,12 @@ async def upload_to_kb(kb_id: str, file: UploadFile = File(...), db: Session = D
     if result["added"] == 0:
         raise HTTPException(status_code=400, detail="Failed to add document to KB")
 
-    # Auto-process
-    DocumentService.update_document_status(db, doc, DocumentStatus.PROCESSING)
-    try:
-        chunks = load_and_split_document(file_path)
-        # Set doc metadata on each chunk for cross-doc traceability
-        for chunk in chunks:
-            chunk.metadata["document_id"] = doc.id
-            chunk.metadata["document_name"] = doc.filename
-        kb_store_name = f"kb_{kb_id}"
-        qa = QAService()
-        qa.create_vector_store(chunks, kb_store_name)
-        qa.extract_and_store_tables(file_path, kb_store_name)
-        # Update doc_ids.txt for tracking
-        doc_ids_path = Path(settings.vector_store_path) / kb_store_name / "doc_ids.txt"
-        existing_ids = set()
-        if doc_ids_path.exists():
-            existing_ids = set(doc_ids_path.read_text(encoding="utf-8").split(","))
-        existing_ids.add(doc.id)
-        doc_ids_path.write_text(",".join(sorted(existing_ids)), encoding="utf-8")
-        DocumentService.update_document_status(
-            db, doc, DocumentStatus.READY, chunk_count=len(chunks)
-        )
-    except Exception as e:
-        DocumentService.update_document_status(
-            db, doc, DocumentStatus.FAILED, error_message=str(e)
-        )
-        raise ProcessingError(str(e))
+    # Process in background
+    background_tasks.add_task(
+        _upload_to_kb_background, kb_id, doc.id, file_path, file.filename
+    )
+    logger.info("Document uploaded to KB | kb_id=%s doc_id=%s filename=%s",
+                kb_id, doc.id, doc.filename)
 
     return {
         "id": doc.id,
@@ -234,8 +306,7 @@ async def upload_to_kb(kb_id: str, file: UploadFile = File(...), db: Session = D
         "file_size": doc.file_size,
         "kb_id": kb_id,
         "kb_name": kb.name,
-        "chunk_count": len(chunks),
-        "status": "ready",
+        "status": doc.status.value,
     }
 
 

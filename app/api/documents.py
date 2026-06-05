@@ -1,5 +1,7 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+import logging
 import os
+
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -17,12 +19,55 @@ from app.services.qa_service import QAService, load_and_split_document
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+def _process_document_background(doc_id: str):
+    """Background task: load, split, embed and index a document."""
+    from app.db.database import SessionLocal
+    db = SessionLocal()
+    try:
+        doc = DocumentService.get_document(db, doc_id)
+        if not doc or doc.status == DocumentStatus.READY:
+            return
+
+        DocumentService.update_document_status(db, doc, DocumentStatus.PROCESSING)
+        progress_tracker.set(doc_id, "正在加载文档...", 10)
+
+        chunks = load_and_split_document(doc.file_path)
+        progress_tracker.set(doc_id, "文本分割完成", 40)
+
+        qa = QAService()
+        progress_tracker.set(doc_id, "正在创建向量库...", 60)
+        qa.create_vector_store(chunks, doc.id)
+        qa.extract_and_store_tables(doc.file_path, doc.id)
+        progress_tracker.set(doc_id, "处理完成", 100)
+
+        DocumentService.update_document_status(
+            db, doc, DocumentStatus.READY, chunk_count=len(chunks)
+        )
+        logger.info("Document processed OK | doc_id=%s chunks=%d", doc_id, len(chunks))
+    except Exception as e:
+        logger.error("Document processing failed | doc_id=%s error=%s", doc_id, e)
+        db.rollback()
+        try:
+            doc = DocumentService.get_document(db, doc_id)
+            if doc:
+                DocumentService.update_document_status(
+                    db, doc, DocumentStatus.FAILED, error_message=str(e)
+                )
+        except Exception:
+            pass
+        progress_tracker.set(doc_id, f"处理失败: {e}", 0)
+    finally:
+        db.close()
 
 
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名不能为空")
@@ -44,6 +89,10 @@ async def upload_document(
         db, file.filename, file_path, file_type, file_size
     )
 
+    # Auto-process in background
+    background_tasks.add_task(_process_document_background, doc.id)
+    logger.info("Document uploaded | doc_id=%s filename=%s", doc.id, doc.filename)
+
     return {
         "id": doc.id,
         "filename": doc.filename,
@@ -58,39 +107,22 @@ async def upload_document(
 async def process_document(
     doc_id: str,
     db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     doc = DocumentService.get_document(db, doc_id)
     if not doc:
         raise DocumentNotFoundError(doc_id)
 
     if doc.status == DocumentStatus.READY:
+        logger.info("Document already processed | doc_id=%s", doc_id)
         return {"message": "文档已处理", "status": doc.status.value}
 
-    DocumentService.update_document_status(db, doc, DocumentStatus.PROCESSING)
-
-    try:
-        progress_tracker.set(doc_id, "正在加载文档...", 10)
-        chunks = load_and_split_document(doc.file_path)
-        progress_tracker.set(doc_id, "文本分割完成", 40)
-
-        qa = QAService()
-        progress_tracker.set(doc_id, "正在创建向量库...", 60)
-        qa.create_vector_store(chunks, doc.id)
-        qa.extract_and_store_tables(doc.file_path, doc.id)
-        progress_tracker.set(doc_id, "处理完成", 100)
-        DocumentService.update_document_status(
-            db, doc, DocumentStatus.READY, chunk_count=len(chunks)
-        )
-        return {
-            "message": "文档处理完成",
-            "status": DocumentStatus.READY.value,
-            "chunk_count": len(chunks),
-        }
-    except Exception as e:
-        DocumentService.update_document_status(
-            db, doc, DocumentStatus.FAILED, error_message=str(e)
-        )
-        raise ProcessingError(str(e))
+    background_tasks.add_task(_process_document_background, doc.id)
+    logger.info("Document processing queued | doc_id=%s", doc_id)
+    return {
+        "message": "文档处理已加入后台队列",
+        "status": DocumentStatus.PROCESSING.value,
+    }
 
 
 @router.get("/")
@@ -194,8 +226,22 @@ async def delete_document(
     if not doc:
         raise DocumentNotFoundError(doc_id)
 
+    # Check if doc belongs to any KB and rebuild those indexes
+    from app.models.document import KnowledgeBaseDocument
+    from app.services.knowledge_base_service import KnowledgeBaseService
+    kb_assocs = db.query(KnowledgeBaseDocument).filter(
+        KnowledgeBaseDocument.doc_id == doc_id
+    ).all()
+
     qa = QAService()
     qa.delete_vector_store(doc.id)
     DocumentService.delete_document(db, doc)
+
+    # Rebuild KB indexes after doc deletion
+    for assoc in kb_assocs:
+        try:
+            KnowledgeBaseService.rebuild_kb_index(db, assoc.kb_id)
+        except ValueError:
+            qa.delete_vector_store(f"kb_{assoc.kb_id}")
 
     return {"message": "文档已删除"}

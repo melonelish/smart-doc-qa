@@ -1,33 +1,56 @@
 """
 WebSocket progress tracker — pushes real-time document processing status.
-
-Usage:
-    from app.services.progress_ws import set_progress, register_ws, unregister_ws
-
-    # In your processing pipeline:
-    set_progress(doc_id, "加载文档...", 10)
-    set_progress(doc_id, "文本分割...", 40)
-    set_progress(doc_id, "向量化...", 70)
-    set_progress(doc_id, "完成", 100)
 """
 
 import asyncio
 import json
+import threading
+import time
 from typing import Optional
 
 from fastapi import WebSocket
+
+_TTL_SECONDS = 60
 
 
 class ProgressTracker:
     """Singleton per-document progress broadcaster."""
 
     def __init__(self):
-        self._state: dict[str, dict] = {}  # doc_id → {stage, percent}
-        self._subscribers: dict[str, list[WebSocket]] = {}  # doc_id → [ws, ...]
+        self._state: dict[str, dict] = {}
+        self._subscribers: dict[str, list[WebSocket]] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop_lock = threading.Lock()
+
+    def _get_loop(self) -> Optional[asyncio.AbstractEventLoop]:
+        if self._loop and not self._loop.is_closed():
+            return self._loop
+        with self._loop_lock:
+            if self._loop and not self._loop.is_closed():
+                return self._loop
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # Never call get_event_loop() from a background thread —
+                # it may create a new idle loop that isn't the server's loop.
+                self._loop = None
+            return self._loop
+
+    def _schedule_send(self, ws: WebSocket, msg: str):
+        loop = self._get_loop()
+        if loop is None or not loop.is_running():
+            # State is already saved; subscriber will receive it on connect.
+            return
+        try:
+            # Use thread-safe method to schedule coroutine on the event loop.
+            # loop.create_task() must be called from the loop's own thread;
+            # from a background thread (e.g. BackgroundTasks) it raises RuntimeError.
+            asyncio.run_coroutine_threadsafe(self._safe_send(ws, msg), loop)
+        except Exception:
+            pass
 
     def set(self, doc_id: str, stage: str, percent: int):
-        """Update progress and broadcast to all subscribers."""
-        self._state[doc_id] = {"stage": stage, "percent": percent}
+        self._state[doc_id] = {"stage": stage, "percent": percent, "ts": time.time()}
         msg = json.dumps({
             "type": "progress",
             "doc_id": doc_id,
@@ -35,11 +58,18 @@ class ProgressTracker:
             "percent": percent,
         }, ensure_ascii=False)
 
-        for ws in self._subscribers.get(doc_id, []):
-            try:
-                asyncio.get_event_loop().create_task(self._safe_send(ws, msg))
-            except RuntimeError:
-                pass
+        for ws in list(self._subscribers.get(doc_id, [])):
+            self._schedule_send(ws, msg)
+
+        if percent >= 100 or percent <= 0:
+            loop = self._get_loop()
+            if loop and loop.is_running():
+                loop.call_later(_TTL_SECONDS, self._cleanup_if_stale, doc_id, percent)
+
+    def _cleanup_if_stale(self, doc_id: str, expected_percent: int):
+        st = self._state.get(doc_id)
+        if st and st["percent"] == expected_percent:
+            self.clear(doc_id)
 
     def get(self, doc_id: str) -> Optional[dict]:
         return self._state.get(doc_id)
@@ -49,20 +79,28 @@ class ProgressTracker:
         self._subscribers.pop(doc_id, None)
 
     async def subscribe(self, doc_id: str, ws: WebSocket):
-        """Register a WebSocket for progress updates."""
+        with self._loop_lock:
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
         if doc_id not in self._subscribers:
             self._subscribers[doc_id] = []
         self._subscribers[doc_id].append(ws)
 
-        # Send current state immediately
         if doc_id in self._state:
+            st = self._state[doc_id]
             msg = json.dumps({
                 "type": "progress",
                 "doc_id": doc_id,
-                "stage": self._state[doc_id]["stage"],
-                "percent": self._state[doc_id]["percent"],
+                "stage": st["stage"],
+                "percent": st["percent"],
             }, ensure_ascii=False)
-            await ws.send_text(msg)
+            try:
+                await ws.send_text(msg)
+            except Exception:
+                pass
 
     async def unsubscribe(self, doc_id: str, ws: WebSocket):
         if doc_id in self._subscribers:
@@ -78,5 +116,4 @@ class ProgressTracker:
             pass
 
 
-# Module-level singleton
 progress_tracker = ProgressTracker()

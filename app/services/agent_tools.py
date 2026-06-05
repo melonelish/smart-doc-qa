@@ -77,14 +77,16 @@ _SAFE_OPS = {
     ast.UAdd: operator.pos,
 }
 
-_CONSTANTS = {
-    "pi": math.pi,
-    "e": math.e,
+_SAFE_CALLS = {
     "abs": abs,
     "round": round,
     "max": max,
     "min": min,
     "sum": sum,
+    "int": int,
+    "float": float,
+    "pow": pow,
+    "len": len,
 }
 
 
@@ -94,6 +96,12 @@ def _safe_eval(node: ast.AST) -> float:
     if isinstance(node, ast.Constant):
         if isinstance(node.value, (int, float)):
             return float(node.value)
+        if isinstance(node.value, str):
+            # Support string-to-number conversion in safe contexts
+            try:
+                return float(node.value)
+            except (ValueError, TypeError):
+                pass
         raise ValueError(f"不支持的常量类型: {type(node.value).__name__}")
     if isinstance(node, ast.BinOp):
         op_type = type(node.op)
@@ -107,7 +115,21 @@ def _safe_eval(node: ast.AST) -> float:
         if op_type not in _SAFE_OPS:
             raise ValueError(f"不支持的一元运算符: {op_type.__name__}")
         return _SAFE_OPS[op_type](_safe_eval(node.operand))
+    if isinstance(node, ast.Call):
+        func_name = _get_func_name(node.func)
+        if func_name not in _SAFE_CALLS:
+            raise ValueError(f"不支持的函数调用: {func_name}")
+        args = [_safe_eval(arg) for arg in node.args]
+        return float(_SAFE_CALLS[func_name](*args))
     raise ValueError(f"不支持的表达式节点: {type(node).__name__}")
+
+
+def _get_func_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
 
 
 def calculator(expression: str) -> str:
@@ -116,7 +138,10 @@ def calculator(expression: str) -> str:
 
         expr_str = expr_str.replace("×", "*").replace("÷", "/")
         expr_str = expr_str.replace("％", "%").replace("%", "/100")
-        expr_str = expr_str.replace(",", "")
+        # Only remove commas used as thousands separators (between digits),
+        # NOT commas that separate function arguments.
+        # A thousands-comma is: digit, comma, digit
+        expr_str = re.sub(r'(?<=\d),(?=\d)', '', expr_str)
 
         expr_str = re.sub(r'(?<=\d)([万亿])', r'*10**\1', expr_str)
 

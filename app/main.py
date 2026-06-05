@@ -1,4 +1,5 @@
 import sys
+import uuid
 from pathlib import Path
 
 _project_root = Path(__file__).parent.parent.resolve()
@@ -13,12 +14,21 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.core.config import get_settings
-from app.db.database import engine, SessionLocal, Base
+from app.db.database import engine, Base
 from app.exceptions import AppException
 from app.api import documents, qa, knowledge_bases
 from app.services.progress_ws import progress_tracker
+from app.utils.log_util import setup_logging, get_logger, set_request_id, clear_request_id
 
 settings = get_settings()
+
+# ── Initialise logging (BEFORE anything else) ──
+setup_logging(
+    level=settings.log_level,
+    log_dir=settings.log_dir,
+    app_name=settings.app_name,
+)
+logger = get_logger(__name__)
 
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -42,15 +52,15 @@ def create_database_if_not_exists():
                     "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
                 )
             )
-            print(f"[OK] 数据库 '{settings.mysql_database}' 自动创建成功")
+            logger.info("数据库 '%s' 自动创建成功", settings.mysql_database)
         else:
-            print(f"[OK] 数据库 '{settings.mysql_database}' 已存在")
+            logger.info("数据库 '%s' 已存在", settings.mysql_database)
     engine_no_db.dispose()
 
 
 def create_tables():
     Base.metadata.create_all(bind=engine)
-    print("[OK] 数据库表初始化完成")
+    logger.info("数据库表初始化完成")
 
 
 def create_app() -> FastAPI:
@@ -70,6 +80,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # ── Request tracing middleware (inject X-Request-ID) ──
+    @app.middleware("http")
+    async def trace_middleware(request: Request, call_next):
+        req_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+        set_request_id(req_id)
+        logger.info("[%s] %s %s", req_id, request.method, request.url.path)
+        response = await call_next(request)
+        clear_request_id()
+        return response
+
     # ── No-cache headers on static files via raw ASGI ──
     from starlette.types import ASGIApp, Scope, Receive, Send
 
@@ -78,7 +98,8 @@ def create_app() -> FastAPI:
             self.app = app
 
         async def __call__(self, scope: Scope, receive: Receive, send: Send):
-            if scope["type"] == "http" and scope["path"].startswith("/static"):
+            path = scope["path"]
+            if scope["type"] == "http" and (path.startswith("/static") or path.startswith("/assets")):
                 async def send_wrapper(message):
                     if message["type"] == "http.response.start":
                         headers = [(k, v) for k, v in message.get("headers", []) if k != b"cache-control"]
@@ -96,6 +117,12 @@ def create_app() -> FastAPI:
     app.include_router(documents.router)
     app.include_router(qa.router)
     app.include_router(knowledge_bases.router)
+
+    # ── Serve new Vue frontend build ──
+    _VUE_DIST = _project_root / "frontend" / "dist"
+    if _VUE_DIST.is_dir():
+        logger.info("Serving Vue frontend from %s", _VUE_DIST)
+        app.mount("/assets", StaticFiles(directory=str(_VUE_DIST / "assets")), name="vue_assets")
 
     # ── Global exception handlers ───────────────────────
 
@@ -170,8 +197,20 @@ def create_app() -> FastAPI:
             "store_contents": [str(p.name) for p in store_dir.iterdir()] if store_dir.exists() else [],
         }
 
-    @app.get("/")
-    async def serve_frontend():
+    @app.get("/{path:path}")
+    async def serve_frontend(path: str):
+        """SPA fallback: serve Vue app index.html for any non-API route."""
+        if path.startswith(("api/", "ws/", "static/", "assets/", "debug/", "health", "docs", "redoc", "openapi")):
+            return JSONResponse(status_code=404, content={"error": "Not found"})
+
+        _vue_index = _project_root / "frontend" / "dist" / "index.html"
+        if _vue_index.is_file():
+            return FileResponse(
+                str(_vue_index),
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
+
+        # Fallback to old static frontend
         return FileResponse(STATIC_DIR / "index.html")
 
     return app
@@ -187,4 +226,5 @@ if __name__ == "__main__":
         host=settings.app_host,
         port=settings.app_port,
         reload=settings.app_debug,
+        reload_dirs=[str(_project_root / "app")] if settings.app_debug else [],
     )

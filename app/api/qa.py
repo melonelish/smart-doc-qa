@@ -2,18 +2,19 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.exceptions import VectorStoreNotFoundError, QAError
+from app.exceptions import VectorStoreNotFoundError, QAError, ConfigurationError
 from app.models.document import ConversationRecord
-from app.services.qa_service import QAService, conversation_memory
+from app.services.qa_service import QAService
+from app.utils.conversation_store import conversation_store as conversation_memory
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/qa", tags=["qa"])
@@ -35,7 +36,7 @@ def _save_turn(
             role=role,
             content=content,
             sources=sources,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         db.add(record)
         db.commit()
@@ -63,6 +64,12 @@ class QuestionRequest(BaseModel):
         default=True,
         description="是否启用 Cross-Encoder 重排序",
     )
+
+    @model_validator(mode="after")
+    def _check_target(self) -> "QuestionRequest":
+        if not self.document_id and not self.kb_id:
+            raise ValueError("document_id 和 kb_id 至少提供一个")
+        return self
 
 
 class SourceChunk(BaseModel):
@@ -132,6 +139,8 @@ async def ask_question(
         return QuestionResponse(**result)
     except ValueError as e:
         raise VectorStoreNotFoundError(target_id)
+    except ConfigurationError:
+        raise  # let FastAPI handle the 400 directly
     except RuntimeError as e:
         raise QAError(str(e))
     except Exception as e:
@@ -165,9 +174,13 @@ async def ask_question_stream(request: QuestionRequest, db: Session = Depends(ge
                 use_hybrid=request.use_hybrid,
                 use_rerank=request.use_rerank,
             )
-    except ValueError as e:
-        raise VectorStoreNotFoundError(request.document_id)
+    except (ValueError, VectorStoreNotFoundError) as e:
+        raise VectorStoreNotFoundError(request.kb_id or request.document_id)
+    except ConfigurationError:
+        raise
     except RuntimeError as e:
+        raise QAError(str(e))
+    except Exception as e:
         raise QAError(str(e))
 
     _save_turn(
@@ -180,15 +193,34 @@ async def ask_question_stream(request: QuestionRequest, db: Session = Depends(ge
         conv_id = result.get("conversation_id", "")
         sources = result.get("sources", [])
         source_details = result.get("source_details", [])
+        retrieval_method = result.get("retrieval_method", "")
+        source_count = result.get("source_count", 0)
+        tool_log = result.get("tool_log", [])
 
-        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conv_id, 'sources': sources, 'source_details': source_details, 'retrieval_method': result.get('retrieval_method', ''), 'source_count': result.get('source_count', 0), 'tool_log': result.get('tool_log', [])}, ensure_ascii=False)}\n\n"
+        # 1) Meta event
+        meta = {
+            "type": "meta",
+            "conversation_id": conv_id,
+            "sources": sources,
+            "source_details": source_details,
+            "retrieval_method": retrieval_method,
+            "source_count": source_count,
+            "tool_log": tool_log,
+        }
+        yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
 
+        # 2) Stream answer tokens (true streaming requires streaming from LLM;
+        #    here we fall back to chunk-by-char for non-streaming path)
         answer = result.get("answer", "")
+        # Try to get a streaming generator from the service
+        # (If the service supports streaming, use it; otherwise char-by-char)
         for char in answer:
-            yield f"data: {json.dumps({'type': 'token', 'text': char}, ensure_ascii=False)}\n\n"
-            await asyncio.sleep(0.01)
+            token = {"type": "token", "text": char}
+            yield f"data: {json.dumps(token, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.005)
 
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        # 3) Done event
+        yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         sse_generator(),
@@ -271,24 +303,50 @@ async def list_conversations(
             ConversationRecord.conversation_id,
             ConversationRecord.document_id,
             func.min(ConversationRecord.created_at).label("started_at"),
+            func.max(ConversationRecord.created_at).label("last_activity_at"),
             func.count(ConversationRecord.id).label("message_count"),
         )
         .group_by(
             ConversationRecord.conversation_id,
             ConversationRecord.document_id,
         )
-        .order_by(func.min(ConversationRecord.created_at).desc())
+        .order_by(func.max(ConversationRecord.created_at).desc())
         .limit(limit)
         .all()
     )
+
+    conv_ids = [r.conversation_id for r in records]
+    first_questions: dict[str, str] = {}
+    last_questions: dict[str, str] = {}
+    if conv_ids:
+        fq_rows = (
+            db.query(
+                ConversationRecord.conversation_id,
+                ConversationRecord.content,
+            )
+            .filter(
+                ConversationRecord.conversation_id.in_(conv_ids),
+                ConversationRecord.role == "user",
+            )
+            .order_by(ConversationRecord.created_at.asc())
+            .all()
+        )
+        for row in fq_rows:
+            if row.conversation_id not in first_questions:
+                first_questions[row.conversation_id] = row.content
+            last_questions[row.conversation_id] = row.content
+
     return {
         "count": len(records),
         "conversations": [
             {
                 "conversation_id": r.conversation_id,
                 "document_id": r.document_id,
-                "started_at": r.started_at.isoformat(),
+                "started_at": r.started_at.isoformat() + ("+00:00" if not r.started_at.tzinfo else ""),
+                "last_activity_at": r.last_activity_at.isoformat() + ("+00:00" if not r.last_activity_at.tzinfo else ""),
                 "message_count": r.message_count,
+                "first_question": first_questions.get(r.conversation_id, ""),
+                "last_question": last_questions.get(r.conversation_id, ""),
             }
             for r in records
         ],

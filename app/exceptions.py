@@ -103,3 +103,14 @@ class QAError(AppException):
             message="问答服务异常",
             detail=reason,
         )
+
+
+class ConfigurationError(AppException):
+    """Raised when a required external service is not configured."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            status_code=400,
+            message=message,
+            detail=message,
+        )

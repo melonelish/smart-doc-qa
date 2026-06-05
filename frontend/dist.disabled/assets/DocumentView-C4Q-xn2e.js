@@ -1,0 +1,1 @@
+import{d as e,m as t,r as n,v as r}from"./index-ajBZ3zL4.js";var i={},a={class:`doc-view`};function o(n,i){return r(),t(`div`,a,[...i[0]||=[e(`p`,{class:`text-muted`},`单文档模式 - 开发中`,-1)]])}var s=n(i,[[`render`,o],[`__scopeId`,`data-v-39cf7a30`]]);export{s as default};
