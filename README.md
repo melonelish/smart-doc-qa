@@ -5,7 +5,7 @@
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-0.115+-009688.svg?style=flat-square" alt="FastAPI"></a>
   <a href="https://www.langchain.com/"><img src="https://img.shields.io/badge/LangChain-1.3+-green.svg?style=flat-square" alt="LangChain"></a>
   <a href="https://github.com/facebookresearch/faiss"><img src="https://img.shields.io/badge/FAISS-1.14+-orange.svg?style=flat-square" alt="FAISS"></a>
-  <img src="https://img.shields.io/badge/Release-v2.5-brightgreen.svg?style=flat-square" alt="v2.5">
+  <img src="https://img.shields.io/badge/Release-v2.6-brightgreen.svg?style=flat-square" alt="v2.6">
   <a href="https://github.com/melonskin/smart-doc-qa/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License"></a>
   <a href="https://github.com/melonskin/smart-doc-qa"><img src="https://img.shields.io/github/stars/melonskin/smart-doc-qa?style=flat-square&label=Stars" alt="Stars"></a>
 </p>
@@ -35,52 +35,64 @@ SmartDocQA 是基于 **领域驱动架构** 的智能文档问答系统。支持
 | 📚 **Knowledge Base Management** | Create, list, delete KBs; each domain has independent KBs |
 | 🔍 **RAG Architecture** | LangChain + FAISS hybrid search with Cross-Encoder rerank |
 | 📄 **Multi-format Support** | PDF, TXT, Markdown, CSV, Word + OCR image support |
-| ⚡ **Streaming Answers** | SSE streaming for real-time AI responses |
+| ⚡ **Streaming Answers** | SSE streaming for real-time AI responses (Vue 3 frontend) |
 | 📎 **Source Attribution** | Citation markers `[¹][²][³]` with source details |
-| 💬 **Conversation History** | Multi-turn dialogue with history panel, delete & restore |
+| 💬 **Conversation History** | Multi-turn dialogue with history panel, delete & restore, grouped by date |
 | 🔌 **RESTful API** | FastAPI with auto-generated Swagger docs |
 | 💾 **Local Embeddings** | Supports local TF-IDF vectorization, no external API required |
 | 🧠 **Hybrid Search** | FAISS vector search + BM25 keyword search + RRF fusion |
 | 🔄 **Cross-Document Comparison** | Auto-detect comparison queries, group by document, structured tables |
 | 🤖 **Agent Tools** | LLM-driven function calling: calculator for precise math, web search for real-time info |
+| 🎨 **Modern Frontend** | Vue 3.5 + TypeScript 5 + Vite 8 + Naive UI 2, Pinia state management |
 
 ---
 
 ## 🏗️ Architecture | 系统架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    Frontend (HTML/JS/CSS)            │
-│  ┌──────────────┐  ┌─────────────────┐              │
-│  │ Domain Nav   │  │ Chat Interface  │              │
-│  │ • Enterprise │  │ • Streaming     │              │
-│  │ • Research   │  │ • Citations     │              │
-│  │ • Legal      │  │ • History Panel │              │
-│  └──────┬───────┘  └────────┬────────┘              │
-└─────────┼───────────────────┼───────────────────────┘
-          │                   │
-          ▼                   ▼
-┌─────────────────────────────────────────────────────┐
-│                  FastAPI Backend                     │
-│  ┌──────────┐  ┌────────────┐  ┌──────────────────┐ │
-│  │ KB API   │  │ Doc API    │  │ Q&A API (SSE)   │ │
-│  │ /kbs     │  │ /docs      │  │ /ask, /ask-stream│ │
-│  └────┬─────┘  └─────┬──────┘  └───────┬──────────┘ │
+┌──────────────────────────────────────────────────────────────┐
+│              Frontend (Vue 3.5 + TypeScript 5)            │
+│  ┌──────────┐  ┌─────────────────────────────────────┐   │
+│  │ SideNav   │  │ ChatPanel (Naive UI 2)             │   │
+│  │ • KBs    │  │  • MessageList (SSE streaming)    │   │
+│  │ • History │  │  • MessageInput (Ctrl+Enter换行) │   │
+│  └────┬─────┘  │  • HistoryPanel (日期分组)        │   │
+│         │        └──────────────────┬──────────────────┘   │
+└─────────┼──────────────────────────┼──────────────────────┘
+          │                          │
+          ▼                          ▼
+┌──────────────────────────────────────────────────────────────┐
+│                  FastAPI Backend (Uvicorn)                 │
+│  ┌──────────┐  ┌────────────┐  ┌────────────────────┐  │
+│  │ KB API   │  │ Doc API    │  │ Q&A API (SSE)      │  │
+│  │ /kbs     │  │ /docs      │  │ /ask, /ask-stream  │  │
+│  └────┬─────┘  └─────┬──────┘  └─────────┬─────────┘  │
 │       │              │                  │            │
-│  ┌────▼──────────────▼──────────────────▼─────────┐  │
-│  │            LangChain Service Layer              │  │
-│  │  • Document Loading & Splitting               │  │
-│  │  • Vector Embedding (Local TF-IDF / OpenAI)   │  │
-│  │  • FAISS Vector Store + BM25 Keyword Search   │  │
-│  │  • RRF Fusion + Cross-Encoder Rerank          │  │
-│  │  • Agent Loop (Tool Calling → Execute → LLM)  │  │
-│  │  • LLM Chain (RAG)                           │  │
-│  └──────────────────┬────────────────────────────┘  │
-└─────────────────────┼───────────────────────────────┘
+│  ┌────▼──────────────▼──────────────────▼─────────┐      │
+│  │            LangChain Service Layer              │      │
+│  │  • Document Loading & Splitting               │      │
+│  │  • Vector Embedding (Local TF-IDF / OpenAI)  │      │
+│  │  • FAISS Vector Store + BM25 Keyword Search  │      │
+│  │  • RRF Fusion + Cross-Encoder Rerank         │      │
+│  │  • Agent Loop (Tool Calling → Execute → LLM) │      │
+│  │  • LLM Chain (RAG) + Streaming              │      │
+│  └──────────────────┬────────────────────────────┘      │
+└─────────────────────┼─────────────────────────────────────┘
                       │
           ┌───────────▼───────────┐
           │  FAISS + MySQL 8.0    │
-          └───────────────────────┘
+          └─────────────────────────┘
+```
+
+**Frontend Architecture (Vue 3 + Pinia):**
+```
+frontend/src/
+├── stores/          # Pinia (conversation, document, ui, ...)
+├── components/      # Reusable Vue components
+├── views/           # Page-level components
+├── api/             # Axios + TypeScript types
+├── composables/     # Composition API hooks
+└── router/          # Vue Router
 ```
 
 **RAG Pipeline：**
@@ -115,15 +127,16 @@ Query:     Question → Query Type Detection ───────────�
 | Layer | Technology | Description |
 |-------|------------|-------------|
 | **Web Framework** | FastAPI | High-performance async web framework |
-| **Frontend** | Vanilla HTML/CSS/JS | Lightweight single-page app |
+| **Frontend** | Vue 3.5 + TypeScript 5 + Vite 8 + Naive UI 2 | Modern reactive SPA |
+| **State Management** | Pinia | Lightweight, TypeScript-first stores |
 | **AI Framework** | LangChain | LLM application development framework |
-| **LLM** | OpenAI GPT-4o-mini / Compatible | Pluggable LLM backend |
+| **LLM** | DeepSeek V4 (Flash) / OpenAI Compatible | Pluggable LLM backend |
 | **Embeddings** | Local TF-IDF (default) / OpenAI | Text vectorization |
 | **Vector DB** | FAISS | High-speed similarity search |
 | **Keyword Search** | BM25 (via rank_bm25) | Lexical fallback search |
 | **Reranker** | Cross-Encoder (BAAI/bge-reranker-v2-m3) | Re-rank fusion results |
 | **Relational DB** | MySQL 8.0 | Metadata, conversations, KBs |
-| **Container** | Docker + Compose | One-command deployment |
+| **Container** | Docker + Compose (multi-stage build) | One-command deployment |
 
 ---
 
@@ -131,29 +144,36 @@ Query:     Question → Query Type Detection ───────────�
 
 ```
 smart-doc-qa/
-├── app/
-│   ├── api/                     # API Routes
-│   │   ├── documents.py        # Document endpoints
-│   │   ├── knowledge_bases.py  # KB CRUD endpoints
-│   │   └── qa.py               # Q&A endpoints (ask, ask-stream, history)
-│   ├── core/
-│   │   └── config.py           # Pydantic Settings
-│   ├── db/
-│   │   └── database.py         # SQLAlchemy setup
-│   ├── models/
-│   │   └── document.py         # ORM: Document, KnowledgeBase, ConversationRecord
-│   ├── services/
-│   │   ├── document_service.py # Document processing logic
-│   │   ├── knowledge_base_service.py  # KB business logic
-│   │   └── qa_service.py       # RAG Q&A logic (retrieve, rerank, generate)
-│   ├── utils/
-│   ├── static/                 # Frontend assets
-│   │   ├── index.html          # Main SPA
-│   │   ├── css/style.css       # Styles
-│   │   └── js/app.js           # App logic
-│   └── main.py                 # FastAPI entry point
+├── frontend/                  # Vue 3.5 + TypeScript 5 + Vite 8 frontend
+│   ├── src/
+│   │   ├── api/             # API layer (Axios + TypeScript types)
+│   │   ├── assets/          # Static assets (CSS variables, images)
+│   │   ├── components/      # Vue components (chat, history, documents, KB)
+│   │   ├── composables/     # Composition API hooks (useWebSocket)
+│   │   ├── router/          # Vue Router
+│   │   ├── stores/          # Pinia stores (conversation, document, ui, ...)
+│   │   ├── types/           # TypeScript type definitions
+│   │   ├── utils/           # Utility functions
+│   │   ├── views/           # Page components (KnowledgeBaseView, etc.)
+│   │   ├── App.vue
+│   │   ├── main.ts
+│   │   └── style.css
+│   ├── public/
+│   ├── index.html
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   └── env.d.ts
+├── app/                       # FastAPI backend
+│   ├── api/                  # API Routes (documents, knowledge_bases, qa)
+│   ├── core/                 # Config, exceptions
+│   ├── db/                   # Database setup
+│   ├── models/               # SQLAlchemy ORM models
+│   ├── services/             # Business logic (qa_service, document_service, ...)
+│   ├── utils/                # Utilities
+│   ├── static/               # Legacy static files (DEPRECATED)
+│   └── main.py               # FastAPI entry point
 ├── alembic/                    # Database migrations
-│   └── versions/
 ├── tests/
 ├── data/                       # Runtime data (gitignored)
 ├── Dockerfile
@@ -362,6 +382,34 @@ Each domain has **completely isolated knowledge bases** — documents, conversat
 This architecture addresses two major LLM pain points:
 - **Knowledge Cutoff**: Augments the model with uploaded documents
 - **Hallucination**: Answers grounded in real document content with source attribution
+
+---
+
+## 📋 v2.6 Changelog | 更新日志
+
+> 完整变更记录请查看 [CHANGELOG.md](CHANGELOG.md)
+
+### ✨ Added（新功能）
+- 历史记录功能（按日期分组：今天/昨天/日期）
+- 流式输出支持（SSE 逐 token 显示）
+- 多轮对话上下文记忆（`conversation_id` 跨轮次保持）
+- 对话历史 API（`GET /api/v1/qa/history`，返回 `last_question` + `last_activity_at`）
+
+### 🐛 Fixed（Bug 修复）
+- 修复删除文档后向量库未清理（仍能检索已删文档内容）
+- 修复历史面板时间显示错误（UTC 时区未正确转换）
+- 修复流式输出双机器人头像、Ctrl+Enter 无法换行、空文件上传崩溃
+- 修复后端 500 错误（Windows 路径非法字符，缺少 `@staticmethod` 装饰器）
+- 修复历史面板点击无反应、挤压主内容区、缺少滚动条
+
+### ♻️ Changed（变更）
+- **前端架构完全升级**：Vue 3.5 + TypeScript 5 + Vite 8 + Naive UI 2
+- 状态管理迁移到 Pinia（5 个 store）
+- 流式输出改用 fetch API（非 Axios，支持 SSE）
+- Markdown 渲染支持（marked + highlight.js）
+- 主题切换支持（dark/light 模式）
+- Docker 多阶段构建（前端独立构建）
+- 后端时区修复（全项目 `datetime.utcnow` → `datetime.now(timezone.utc)`）
 
 ---
 
