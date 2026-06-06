@@ -1,7 +1,7 @@
 <template>
   <div class="history-item">
     <div class="history-item-main" @click="$emit('restore', conversation.conversation_id)">
-      <div class="history-preview">{{ previewText }}</div>
+      <div class="history-preview" v-html="highlightedPreview"></div>
       <div class="history-meta">
         <span class="history-time">{{ formatTime(conversation.last_activity_at) }}</span>
         <span class="history-count">{{ conversation.message_count }} 条</span>
@@ -23,14 +23,16 @@ import { computed } from 'vue'
 import { NButton, NPopconfirm } from 'naive-ui'
 import type { ConversationSummary } from '../../api/types'
 
-const props = defineProps<{ conversation: ConversationSummary }>()
+const props = defineProps<{
+  conversation: ConversationSummary
+  highlight?: string
+}>()
 defineEmits<{
   restore: [id: string]
   delete: [id: string]
 }>()
 
 const previewText = computed(() => {
-  // 优先显示最新的问题
   const question = props.conversation.last_question || props.conversation.first_question
   if (question) {
     return question.length > 60
@@ -38,6 +40,18 @@ const previewText = computed(() => {
       : question
   }
   return props.conversation.conversation_id.slice(0, 16) + '...'
+})
+
+const highlightedPreview = computed(() => {
+  const text = previewText.value
+  if (!props.highlight || !text) return text
+  const q = props.highlight.trim()
+  if (!q) return text
+  // 转义 HTML 特殊字符
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  // 高亮匹配（不区分大小写）
+  const regex = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
+  return escaped.replace(regex, '<mark class="history-highlight">$1</mark>')
 })
 
 function formatTime(dateStr: string) {
@@ -101,5 +115,12 @@ function formatTime(dateStr: string) {
 }
 .history-item:hover .history-del-btn {
   opacity: 1;
+}
+:deep(.history-highlight) {
+  background: rgba(99, 102, 241, 0.3);
+  color: var(--accent-light);
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 600;
 }
 </style>

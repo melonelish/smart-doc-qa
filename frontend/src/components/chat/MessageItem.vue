@@ -15,30 +15,126 @@
       </div>
       <!-- Tool calls -->
       <div v-if="message.toolLog?.length" class="tool-log">
-        <n-collapse>
-          <n-collapse-item title="🛠️ 工具调用" :name="'tools'">
-            <div v-for="(t, i) in message.toolLog" :key="i" class="tool-log-item">
-              <span class="tool-name">{{ toolIcons[t.tool] || '🔢' }} {{ toolNames[t.tool] || t.tool }}</span>
-              <code class="tool-args">{{ JSON.stringify(t.args) }}</code>
-              <div class="tool-result">{{ t.result.slice(0, 200) }}</div>
+        <div class="tl-header" @click="toolLogOpen = !toolLogOpen" role="button" tabindex="0">
+          <div class="tl-header-left">
+            <span class="tl-icon">🔧</span>
+            <span class="tl-title">工具调用过程</span>
+            <span class="tl-badge">{{ message.toolLog.length }}步</span>
+          </div>
+          <div class="tl-header-right">
+            <span class="tl-status" v-if="!toolLogOpen">点击展开详情</span>
+            <svg
+              class="tl-arrow"
+              :class="{ open: toolLogOpen }"
+              width="14" height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </div>
+        </div>
+        <transition name="tl-expand">
+          <div v-show="toolLogOpen" class="tl-body">
+            <div
+              v-for="(t, i) in message.toolLog"
+              :key="i"
+              class="tl-step"
+            >
+              <div class="tl-step-connector">
+                <div class="tl-step-dot">{{ i + 1 }}</div>
+                <div v-if="i < message.toolLog.length - 1" class="tl-step-line"></div>
+              </div>
+              <div class="tl-step-card">
+                <div class="tl-step-header">
+                  <span class="tl-step-icon">{{ toolIcons[t.tool] || '⚙️' }}</span>
+                  <span class="tl-step-name">{{ toolNames[t.tool] || t.tool }}</span>
+                  <span class="tl-step-status">✅ 完成</span>
+                </div>
+                <div class="tl-step-detail">
+                  <div class="tl-section-label">参数</div>
+                  <div class="tl-args-grid">
+                    <div
+                      v-for="(val, key) in t.args"
+                      :key="key"
+                      class="tl-arg-item"
+                    >
+                      <span class="tl-arg-key">{{ key }}</span>
+                      <code class="tl-arg-val">{{ String(val) }}</code>
+                    </div>
+                  </div>
+                  <div class="tl-section-label">结果</div>
+                  <div class="tl-result-box">
+                    <svg class="tl-result-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                    <span class="tl-result-text">{{ t.result.slice(0, 200) }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
-          </n-collapse-item>
-        </n-collapse>
+          </div>
+        </transition>
       </div>
       <!-- Method tag -->
       <n-tag v-if="message.retrievalMethod" size="tiny" :bordered="false" style="margin-top: 6px">
         {{ message.retrievalMethod }}
       </n-tag>
+      <!-- Copy button -->
+      <div class="message-actions">
+        <button
+          class="msg-copy-btn"
+          :class="{ copied: copied }"
+          @click="handleCopy"
+          :title="copied ? '已复制' : '复制消息'"
+        >
+          <span v-if="copied">✓ 已复制</span>
+          <span v-else class="msg-copy-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 3px;">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            消息复制
+          </span>
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { NTag, NCollapse, NCollapseItem } from 'naive-ui'
+import { ref, computed } from 'vue'
+import { NTag } from 'naive-ui'
 import type { Message } from '../../stores/conversation'
 
-const props = defineProps<{ message: Message }>()
+const props = defineProps<{ message: Message; highlight?: string }>()
+
+const copied = ref(false)
+const toolLogOpen = ref(false)
+
+async function handleCopy() {
+  try {
+    await navigator.clipboard.writeText(props.message.content)
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 2000)
+  } catch {
+    // Fallback for non-HTTPS contexts
+    const ta = document.createElement('textarea')
+    ta.value = props.message.content
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 2000)
+  }
+}
 
 const toolIcons: Record<string, string> = { calculator: '🧮', web_search: '🌐' }
 const toolNames: Record<string, string> = { calculator: '计算器', web_search: '联网搜索' }
@@ -183,37 +279,59 @@ const renderedContent = computed(() => {
   } else {
     html = '<p>' + props.message.content.replace(/\n/g, '<br/>') + '</p>'
   }
+  // Apply search highlight
+  if (props.highlight) {
+    html = highlightText(html, props.highlight)
+  }
   return html
 })
+
+function highlightText(html: string, query: string): string {
+  const q = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(`(${q})`, 'gi')
+  // Only highlight text outside HTML tags
+  return html.replace(/(>|^)([^<]+)/g, (match, boundary, text) => {
+    const highlighted = text.replace(regex, '<mark class="search-highlight">$1</mark>')
+    return boundary + highlighted
+  })
+}
 </script>
 
 <style scoped>
 .message {
   display: flex;
-  gap: 10px;
-  max-width: 85%;
-  animation: fadeInUp 0.3s ease;
+  gap: 8px;
+  animation: fadeInUp 0.25s ease;
+  padding: 0;
 }
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .message.user {
-  align-self: flex-end;
-  flex-direction: row-reverse;
+  margin-left: auto;
+  margin-right: 0;
+  width: fit-content;
+  max-width: 88%;
+  justify-content: flex-end;
+}
+.message.user .message-avatar {
+  display: none;
 }
 .message.assistant {
   align-self: flex-start;
+  max-width: 92%;
 }
 .message-avatar {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 13px;
   flex-shrink: 0;
+  margin-top: 2px;
 }
 .message.user .message-avatar {
   background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
@@ -225,21 +343,24 @@ const renderedContent = computed(() => {
 }
 .message-bubble {
   padding: 12px 16px;
-  border-radius: var(--radius-md);
-  font-size: 13px;
-  line-height: 1.65;
+  border-radius: 14px;
+  font-size: 13.5px;
+  line-height: 1.7;
   word-break: break-word;
+  min-width: 60px;
 }
 .message.user .message-bubble {
-  background: var(--accent);
+  background: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
   color: #fff;
   border-bottom-right-radius: 4px;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.2);
 }
 .message.assistant .message-bubble {
-  background: var(--bg-input);
+  background: var(--bg-card);
   color: var(--text-primary);
   border: 1px solid var(--border);
   border-bottom-left-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 .message-content {
   font-size: 13.5px;
@@ -389,30 +510,234 @@ const renderedContent = computed(() => {
   font-size: 10px;
 }
 .tool-log {
-  margin-top: 8px;
-  padding-top: 6px;
+  margin-top: 10px;
   border-top: 1px solid var(--border);
+  padding-top: 8px;
 }
-.tool-log-item {
-  padding: 4px 8px;
-  margin: 4px 0;
-  background: var(--bg-card);
-  border-radius: 4px;
-  font-size: 11px;
+
+/* ── Header ── */
+.tl-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: linear-gradient(135deg, rgba(99,102,241,0.06) 0%, rgba(15,165,233,0.06) 100%);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s ease;
 }
-.tool-name {
-  color: var(--warning);
+.tl-header:hover {
+  background: linear-gradient(135deg, rgba(99,102,241,0.12) 0%, rgba(15,165,233,0.12) 100%);
+}
+.tl-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tl-icon {
+  font-size: 13px;
+}
+.tl-title {
+  font-size: 12px;
   font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.3px;
 }
-.tool-args {
+.tl-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1 0%, #0ea5e9 100%);
+  color: #fff;
+  line-height: 1.5;
+}
+.tl-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tl-status {
   font-size: 10px;
   color: var(--text-muted);
-  margin-left: 4px;
 }
-.tool-result {
+.tl-arrow {
+  color: var(--text-muted);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.tl-arrow.open {
+  transform: rotate(180deg);
+}
+
+/* ── Expand/Collapse Animation ── */
+.tl-expand-enter-active {
+  animation: tlExpandIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.tl-expand-leave-active {
+  animation: tlExpandIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) reverse;
+}
+@keyframes tlExpandIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scaleY(0.95);
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+    max-height: 800px;
+  }
+}
+
+/* ── Body ── */
+.tl-body {
+  padding: 8px 0 2px 0;
+}
+
+/* ── Timeline Steps ── */
+.tl-step {
+  display: flex;
+  gap: 10px;
+  position: relative;
+}
+.tl-step-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 22px;
+  flex-shrink: 0;
+}
+.tl-step-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1 0%, #0ea5e9 100%);
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.25);
+  flex-shrink: 0;
+  z-index: 1;
+}
+.tl-step-line {
+  width: 2px;
+  flex: 1;
+  min-height: 12px;
+  background: linear-gradient(180deg, rgba(99,102,241,0.3) 0%, rgba(15,165,233,0.3) 100%);
+  border-radius: 1px;
+  margin-top: 2px;
+}
+
+/* ── Step Card ── */
+.tl-step-card {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.tl-step-card:hover {
+  border-color: rgba(99, 102, 241, 0.3);
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.06);
+}
+.tl-step:last-child .tl-step-card {
+  margin-bottom: 0;
+}
+.tl-step-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+.tl-step-icon {
+  font-size: 13px;
+}
+.tl-step-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+.tl-step-status {
+  font-size: 10px;
+  color: #52c41a;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ── Detail Sections ── */
+.tl-step-detail {
+  padding-left: 0;
+}
+.tl-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 3px;
+  margin-top: 4px;
+}
+.tl-section-label:first-child {
+  margin-top: 0;
+}
+
+/* Args grid */
+.tl-args-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.tl-arg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.1);
+  border-radius: 4px;
+  padding: 2px 7px;
+}
+.tl-arg-key {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-light);
+}
+.tl-arg-val {
   font-size: 10px;
   color: var(--text-secondary);
-  margin-top: 2px;
+  background: none;
+  padding: 0;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  word-break: break-all;
+}
+
+/* Result box */
+.tl-result-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 4px 8px;
+  background: rgba(82, 196, 26, 0.06);
+  border: 1px solid rgba(82, 196, 26, 0.15);
+  border-radius: 5px;
+}
+.tl-result-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: #52c41a;
+}
+.tl-result-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  word-break: break-word;
 }
 :deep(.answer-cite) {
   background: rgba(99, 102, 241, 0.15);
@@ -445,5 +770,40 @@ const renderedContent = computed(() => {
 @keyframes typing {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-6px); opacity: 1; }
+}
+.message-actions {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+}
+.msg-copy-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.msg-copy-btn:hover {
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--accent-light);
+}
+.msg-copy-btn.copied {
+  color: #52c41a;
+  font-weight: 600;
+}
+:deep(.search-highlight) {
+  background: rgba(99, 102, 241, 0.35);
+  color: var(--accent-light);
+  padding: 0 3px;
+  border-radius: 3px;
+  font-weight: 600;
 }
 </style>

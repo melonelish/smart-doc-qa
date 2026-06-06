@@ -41,8 +41,17 @@ export const useDocumentStore = defineStore('document', () => {
   }
 
   async function remove(docId: string) {
-    await docApi.deleteDocument(docId)
-    items.value = items.value.filter((d) => d.id !== docId)
+    // Optimistic removal: update UI immediately, rollback on failure
+    const idx = items.value.findIndex((d) => d.id === docId)
+    if (idx === -1) return
+    const [removed] = items.value.splice(idx, 1)
+    try {
+      await docApi.deleteDocument(docId)
+    } catch (err) {
+      // Rollback on failure
+      items.value.splice(idx, 0, removed)
+      throw err
+    }
   }
 
   function updateProgress(docId: string, stage: string, percent: number) {

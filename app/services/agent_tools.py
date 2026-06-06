@@ -160,31 +160,64 @@ def calculator(expression: str) -> str:
 
 
 def web_search(query: str, max_results: int = 5) -> str:
+    import time
+    start = time.time()
     try:
-        try:
-            from ddgs import DDGS
-        except ImportError:
-            from duckduckgo_search import DDGS
+        import requests
+        from bs4 import BeautifulSoup
 
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
+        url = "https://cn.bing.com/search"
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        }
+        params = {"q": query, "count": max_results}
 
-        if not results:
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        items = soup.select("li.b_algo")
+
+        elapsed = time.time() - start
+        logger.info(
+            "[agent] web_search '%s' took %.1fs, results=%d",
+            query[:30], elapsed, len(items),
+        )
+
+        if not items:
             return f"未找到与'{query}'相关的搜索结果。"
 
         parts = []
-        for i, r in enumerate(results, 1):
-            title = r.get("title", "无标题")
-            body = r.get("body", "无摘要")
-            href = r.get("href", "")
-            parts.append(f"[{i}] {title}\n{body}\n来源: {href}")
+        for i, item in enumerate(items[:max_results], 1):
+            title_el = item.select_one("h2 a")
+            title = title_el.get_text(strip=True) if title_el else "无标题"
+            href = title_el.get("href", "") if title_el else ""
+
+            desc_el = item.select_one(".b_caption p")
+            desc = desc_el.get_text(strip=True) if desc_el else ""
+
+            parts.append(f"[{i}] {title}\n{desc}\n来源: {href}")
 
         return "\n\n".join(parts)
-    except ImportError:
-        return "错误: duckduckgo_search 未安装，请运行 pip install duckduckgo_search"
+
+    except requests.exceptions.Timeout:
+        elapsed = time.time() - start
+        logger.warning("[agent] web_search '%s' timeout after %.1fs", query[:30], elapsed)
+        return "搜索超时，请稍后重试"
+    except requests.exceptions.RequestException as e:
+        elapsed = time.time() - start
+        logger.warning("[agent] web_search '%s' request failed: %s", query[:30], e)
+        return f"搜索失败(耗时{elapsed:.0f}s): {e}"
+    except ImportError as e:
+        return f"搜索组件缺失: {e}"
     except Exception as e:
-        logger.warning(f"[agent] web_search failed: {e}")
-        return f"搜索失败: {e}"
+        elapsed = time.time() - start
+        logger.warning("[agent] web_search '%s' error after %.1fs: %s", query[:30], elapsed, e)
+        return f"搜索异常(耗时{elapsed:.0f}s): {e}"
 
 
 # ═══════════════════════════════════════════════════════════

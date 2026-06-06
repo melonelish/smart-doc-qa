@@ -102,8 +102,10 @@ export async function fetchHistory(
   return res.data.items
 }
 
-export async function listConversations(): Promise<ConversationSummary[]> {
-  const res = await client.get('/qa/history')
+export async function listConversations(kbId?: string): Promise<ConversationSummary[]> {
+  const params: Record<string, any> = {}
+  if (kbId) params.kb_id = kbId
+  const res = await client.get('/qa/history', { params })
   return res.data.conversations
 }
 

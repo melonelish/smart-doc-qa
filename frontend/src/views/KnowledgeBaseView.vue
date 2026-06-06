@@ -1,55 +1,10 @@
 ﻿<template>
-  <div class="kb-view">
-    <!-- Left: Documents -->
-    <div class="kb-left-panel">
-      <n-card size="small" :bordered="true" class="doc-card">
-        <template #header>
-          <div class="doc-header">
-            <span class="doc-title">📋 文档</span>
-            <n-tag v-if="kbStore.currentKb" type="primary" size="small" :bordered="false" round>
-              {{ kbStore.currentKb.name }}
-            </n-tag>
-          </div>
-        </template>
-        <template #header-extra>
-          <n-space :size="6">
-            <n-button size="tiny" type="primary" @click="ui.createKBModalOpen = true">
-              ＋ 新建
-            </n-button>
-            <n-button size="tiny" type="info" @click="triggerUpload" :disabled="!kbStore.currentKbId">
-              上传
-            </n-button>
-          </n-space>
-        </template>
-
-        <input type="file" ref="fileInputRef" class="hidden" multiple :accept="acceptStr" @change="handleFileChange" />
-
-        <!-- Upload progress -->
-        <div v-if="uploadProgress.active" class="upload-progress">
-          <span class="upload-filename">{{ uploadProgress.filename }}</span>
-          <div class="upload-bar">
-            <div class="upload-fill" :style="{ width: uploadProgress.percent + '%' }" />
-          </div>
-          <span class="upload-percent">{{ uploadProgress.percent }}%</span>
-        </div>
-
-        <!-- Drop zone hint -->
-        <div v-if="isDragOver" class="drop-hint">
-          📂 松开以上传文件到知识库
-        </div>
-
-        <DocList
-          :items="docStore.items"
-          :loading="docStore.loading"
-          :processing="docStore.processingStatus"
-          @delete-doc="handleDeleteDoc"
-          @process-doc="handleProcessDoc"
-          @preview-doc="handlePreviewDoc"
-        />
-      </n-card>
-    </div>
-
-    <!-- Right: Domain Intro + Chat -->
+  <div
+    class="kb-view"
+    @dragover.prevent="onDragOver"
+    @dragleave.prevent="onDragLeave"
+    @drop.prevent="onDrop"
+  >
     <div class="kb-right-panel">
       <ChatPanel />
     </div>
@@ -78,14 +33,13 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NCard, NButton, NSpace } from 'naive-ui'
+import { NButton } from 'naive-ui'
 import { useUiStore } from '../stores/ui'
 import { useKnowledgeBaseStore } from '../stores/knowledgeBase'
 import { useDocumentStore } from '../stores/document'
 import { useDomainStore } from '../stores/domain'
 import { useConversationStore } from '../stores/conversation'
 import type { Document } from '../api/types'
-import DocList from '../components/document/DocList.vue'
 import ChatPanel from '../components/chat/ChatPanel.vue'
 import DocumentPreview from '../components/document/DocumentPreview.vue'
 import ProcessingModal from '../components/document/ProcessingModal.vue'
@@ -180,10 +134,13 @@ watch(() => kbStore.currentKbId, async (kbId, oldKbId) => {
     if (!loaded) {
       convStore.clear()
     }
+    // Load history for this KB
+    convStore.loadHistory(kbId)
     router.replace(`/kb/${kbId}`)
   } else {
     docStore.items = []
     convStore.clear()
+    convStore.history = []
   }
 })
 
@@ -293,17 +250,22 @@ async function uploadFileWithProgress(file: File, kbId: string): Promise<{ id: s
 }
 
 // ─── Drag & Drop ───
-function handleDragOver(e: DragEvent) {
-  e.preventDefault()
-  isDragOver.value = true
+function onDragOver(e: DragEvent) {
+  if (e.dataTransfer?.types.includes('Files')) {
+    isDragOver.value = true
+  }
 }
 
-function handleDragLeave() {
-  isDragOver.value = false
+function onDragLeave(e: DragEvent) {
+  // Only hide if leaving the panel boundary
+  const related = e.relatedTarget as Node | null
+  const panel = document.querySelector('.kb-left-panel')
+  if (panel && related && !panel.contains(related)) {
+    isDragOver.value = false
+  }
 }
 
-async function handleDrop(e: DragEvent) {
-  e.preventDefault()
+async function onDrop(e: DragEvent) {
   isDragOver.value = false
 
   if (!kbStore.currentKbId) {
@@ -340,25 +302,8 @@ async function handleDrop(e: DragEvent) {
   await loadDocs()
 }
 
-// Setup drag & drop on the doc card element
-onMounted(() => {
-  // After Vue mounts, find the .doc-card element and attach drag listeners
-  const card = document.querySelector('.doc-card .n-card__content') as HTMLElement
-  if (card) {
-    card.addEventListener('dragover', handleDragOver)
-    card.addEventListener('dragleave', handleDragLeave)
-    card.addEventListener('drop', handleDrop)
-  }
-})
-
-onBeforeUnmount(() => {
-  const card = document.querySelector('.doc-card .n-card__content') as HTMLElement
-  if (card) {
-    card.removeEventListener('dragover', handleDragOver)
-    card.removeEventListener('dragleave', handleDragLeave)
-    card.removeEventListener('drop', handleDrop)
-  }
-})
+// Remove old manual DOM event listeners
+// (now using Vue template @dragover/@dragleave/@drop instead)
 
 // ─── Document Preview ───
 function handlePreviewDoc(doc: Document) {
@@ -414,25 +359,6 @@ async function handleDeleteDoc(docId: string) {
   height: 100%;
   gap: 16px;
 }
-.kb-left-panel {
-  width: 300px;
-  min-width: 260px;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-.kb-left-panel :deep(.n-card) {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.kb-left-panel :deep(.n-card__content) {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-  min-height: 0;
-}
 .kb-right-panel {
   flex: 1;
   min-width: 0;
@@ -443,62 +369,44 @@ async function handleDeleteDoc(docId: string) {
 .hidden {
   display: none;
 }
-.upload-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  margin-bottom: 8px;
-  background: var(--bg-input);
-  border-radius: var(--radius-sm);
-}
-.upload-filename {
-  font-size: 12px;
-  color: var(--text-primary);
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.upload-bar {
-  width: 120px;
-  height: 4px;
-  background: var(--border-light);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.upload-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-light));
-  border-radius: 2px;
-  transition: width 0.3s ease;
-}
-.upload-percent {
-  font-size: 11px;
-  color: var(--text-muted);
-  min-width: 32px;
-  text-align: right;
-}
-.drop-hint {
+.drop-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(99, 102, 241, 0.08);
+  z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
-  margin-bottom: 8px;
-  border: 2px dashed var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--info-bg);
-  font-size: 14px;
-  color: var(--accent);
+  pointer-events: none;
 }
-.doc-header {
+.drop-overlay-content {
+  background: var(--bg-card);
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  padding: 40px 60px;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+}
+.drop-overlay-icon { font-size: 48px; margin-bottom: 12px; }
+.drop-overlay-text { font-size: 18px; color: var(--accent); font-weight: 600; }
+.floating-progress {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+  z-index: 999;
+  min-width: 200px;
 }
-.doc-title {
-  font-weight: 600;
-  font-size: 14px;
-}
+.fp-filename { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.fp-bar { width: 80px; height: 4px; background: var(--border-light); border-radius: 2px; overflow: hidden; }
+.fp-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-light)); border-radius: 2px; transition: width 0.3s; }
+.fp-percent { min-width: 28px; text-align: right; color: var(--text-muted); }
 </style>

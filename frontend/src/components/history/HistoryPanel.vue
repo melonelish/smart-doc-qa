@@ -1,15 +1,30 @@
 <template>
   <div class="history-panel">
     <div class="history-panel-header">
-      <span class="history-panel-title">📜 问答历史</span>
+      <span class="history-panel-title">
+        📜 问答历史
+        <span v-if="kbStore.currentKb" class="history-panel-subtitle">· {{ kbStore.currentKb.name }}</span>
+      </span>
       <n-button quaternary size="tiny" @click="ui.toggleHistoryPanel()">✕</n-button>
     </div>
     <div class="history-panel-body">
       <history-search v-model="searchQuery" />
-      <div v-if="convStore.history.length" class="history-stats">
-        共 {{ convStore.history.length }} 个对话, {{ totalMessages }} 条消息
+      <div class="history-stats">
+        <template v-if="searchQuery">
+          找到 {{ filtered.length }} 个匹配
+        </template>
+        <template v-else>
+          共 {{ convStore.history.length }} 个对话, {{ totalMessages }} 条消息
+        </template>
       </div>
       <n-spin v-if="convStore.loadingHistory" size="small" />
+      <!-- Skeleton while loading history -->
+      <div v-if="convStore.loadingHistory" class="history-skeleton-list">
+        <div v-for="i in 5" :key="i" class="history-skeleton-item">
+          <n-skeleton height="14px" width="60%" style="margin-bottom: 6px" :sharp="false" />
+          <n-skeleton height="12px" width="40%" :sharp="false" />
+        </div>
+      </div>
       <template v-else-if="!filtered.length">
         <n-empty :description="searchQuery ? '无匹配结果' : '暂无问答记录'" />
       </template>
@@ -20,6 +35,7 @@
             v-for="conv in group.items"
             :key="conv.conversation_id"
             :conversation="conv"
+            :highlight="searchQuery"
             @restore="handleRestore"
             @delete="handleDelete"
           />
@@ -30,26 +46,29 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { NButton, NSpin, NEmpty } from 'naive-ui'
 import { useUiStore } from '../../stores/ui'
 import { useConversationStore } from '../../stores/conversation'
+import { useKnowledgeBaseStore } from '../../stores/knowledgeBase'
 import HistorySearch from './HistorySearch.vue'
 import HistoryItem from './HistoryItem.vue'
 
 const ui = useUiStore()
 const convStore = useConversationStore()
+const kbStore = useKnowledgeBaseStore()
 const searchQuery = ref('')
 
 const totalMessages = computed(() => convStore.history.reduce((sum, h) => sum + h.message_count, 0))
 
 const filtered = computed(() => {
   if (!searchQuery.value) return convStore.history
-  const q = searchQuery.value.toLowerCase()
-  return convStore.history.filter((h) =>
-    h.first_question?.toLowerCase().includes(q) ||
-    h.conversation_id.toLowerCase().includes(q),
-  )
+  const q = searchQuery.value.toLowerCase().trim()
+  return convStore.history.filter((h) => {
+    // 搜索实际显示的文本（与 UI 显示逻辑一致：last_question 优先）
+    const displayText = (h.last_question || h.first_question || '').toLowerCase()
+    return displayText.includes(q)
+  })
 })
 
 // 按日期分组
@@ -108,7 +127,14 @@ async function handleDelete(convId: string) {
 }
 
 onMounted(() => {
-  convStore.loadHistory()
+  convStore.loadHistory(kbStore.currentKbId || undefined)
+})
+
+// 当切换知识库时，如果历史面板打开，刷新历史记录
+watch(() => kbStore.currentKbId, (newId) => {
+  if (newId && ui.historyPanelOpen) {
+    convStore.loadHistory(newId)
+  }
 })
 </script>
 
@@ -143,6 +169,12 @@ onMounted(() => {
 .history-panel-title {
   font-size: 14px;
   font-weight: 600;
+}
+.history-panel-subtitle {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 4px;
 }
 .history-panel-body {
   flex: 1;

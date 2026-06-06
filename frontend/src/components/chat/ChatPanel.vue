@@ -5,16 +5,29 @@
         <span class="chat-header-title">{{ headerTitle }}</span>
         <span v-if="headerSub" class="chat-header-sub">{{ headerSub }}</span>
       </div>
-      <n-space :size="6">
-        <n-button size="tiny" secondary :disabled="!convStore.messages.length" @click="convStore.clear()">
-          🗑️ 清空
-        </n-button>
-        <n-button size="tiny" secondary @click="ui.toggleHistoryPanel()">
-          📜 历史
-        </n-button>
-      </n-space>
     </div>
     <div class="chat-body">
+      <!-- Search bar (only when there are messages) -->
+      <div v-if="convStore.messages.length" class="chat-search-bar">
+        <span class="chat-search-icon">🔍</span>
+        <input
+          v-model="searchQuery"
+          class="chat-search-input"
+          type="text"
+          placeholder="搜索当前对话内容..."
+        />
+        <button
+          v-if="searchQuery"
+          class="chat-search-clear"
+          @click="searchQuery = ''"
+        >✕</button>
+        <span v-if="searchQuery && filteredMessages.length" class="chat-search-count">
+          找到 {{ filteredMessages.length }} 条
+        </span>
+        <span v-else-if="searchQuery && !filteredMessages.length" class="chat-search-count no-match">
+          无匹配
+        </span>
+      </div>
       <!-- Domain Intro when no messages -->
       <div v-if="!convStore.messages.length" class="domain-intro-embedded">
         <div class="domain-intro-header">
@@ -53,32 +66,101 @@
       </div>
       <MessageList
         v-else
-        :messages="convStore.messages"
+        :messages="filteredMessages"
         :streaming="convStore.streaming"
+        :highlight="searchQuery"
       />
     </div>
-    <MessageInput
-      :disabled="!kbStore.currentKbId || convStore.streaming"
-      @send="handleSend"
-    />
+    <!-- Toolbar: docs + actions -->
+    <div class="chat-toolbar">
+      <div class="chat-toolbar-left">
+        <DocumentSelector
+          v-if="kbStore.currentKbId"
+          :items="docStore.items"
+          :loading="docStore.loading"
+          :processing="docStore.processingStatus"
+          :kb-id="kbStore.currentKbId"
+          @delete-doc="handleDeleteDoc"
+          @process-doc="handleProcessDoc"
+          @preview-doc="handlePreviewDoc"
+          @upload-complete="handleUploadComplete"
+        />
+      </div>
+      <div class="chat-toolbar-right">
+        <n-button size="tiny" secondary :disabled="!convStore.messages.length" @click="convStore.clear()">
+          🗑️ 清空
+        </n-button>
+        <n-button size="tiny" secondary @click="ui.toggleHistoryPanel()">
+          📜 历史
+        </n-button>
+      </div>
+    </div>
+    <div class="chat-input-wrapper">
+      <MessageInput
+        :disabled="!kbStore.currentKbId || convStore.streaming"
+        @send="handleSend"
+      />
+    </div>
   </div>
+
+  <!-- Document Preview Modal -->
+  <DocumentPreview
+    v-if="previewDoc"
+    :doc-id="previewDoc.id"
+    :filename="previewDoc.filename"
+    :file-type="previewDoc.file_type"
+    :file-size="previewDoc.file_size"
+    v-model:show="previewVisible"
+  />
+
+  <!-- Processing Modal -->
+  <ProcessingModal
+    v-if="processingModal.show"
+    v-model:show="processingModal.show"
+    :doc-id="processingModal.docId"
+    :filename="processingModal.filename"
+    @complete="handleProcessingComplete"
+  />
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { NSpace, NButton } from 'naive-ui'
 import { useUiStore } from '../../stores/ui'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBase'
+import { useDocumentStore } from '../../stores/document'
 import { useConversationStore } from '../../stores/conversation'
 import { useDomainStore } from '../../stores/domain'
 import MessageList from './MessageList.vue'
 import MessageInput from './MessageInput.vue'
+import DocumentSelector from '../document/DocumentSelector.vue'
+import DocumentPreview from '../document/DocumentPreview.vue'
+import ProcessingModal from '../document/ProcessingModal.vue'
+import type { Document } from '../../api/types'
 
 const ui = useUiStore()
 const kbStore = useKnowledgeBaseStore()
+const docStore = useDocumentStore()
 const convStore = useConversationStore()
 const domainStore = useDomainStore()
 const domain = domainStore.currentDomain
+
+const searchQuery = ref('')
+const previewDoc = ref<Document | null>(null)
+const previewVisible = ref(false)
+const processingModal = reactive({
+  show: false,
+  docId: '',
+  filename: '',
+})
+
+const filteredMessages = computed(() => {
+  if (!searchQuery.value) return convStore.messages
+  const q = searchQuery.value.toLowerCase().trim()
+  return convStore.messages.filter((m) =>
+    m.content.toLowerCase().includes(q),
+  )
+})
 
 const headerTitle = computed(() => kbStore.currentKb?.name || '选择知识库开始对话')
 const headerSub = computed(() => {
@@ -94,6 +176,44 @@ async function handleSend(question: string) {
     question,
   })
 }
+
+async function handleDeleteDoc(docId: string) {
+  await docStore.remove(docId)
+}
+
+async function handleProcessDoc(docId: string) {
+  try {
+    const res = await fetch(`/api/v1/documents/${docId}/process`, { method: 'POST' })
+    if (res.ok) window.$message?.success?.('处理完成')
+    else window.$message?.error?.('处理失败')
+  } catch (e) {
+    window.$message?.error?.('处理异常')
+  }
+}
+
+function handlePreviewDoc(doc: Document) {
+  previewDoc.value = doc
+  previewVisible.value = true
+}
+
+function handleUploadComplete(payload: { docId: string; filename: string }) {
+  processingModal.show = true
+  processingModal.docId = payload.docId
+  processingModal.filename = payload.filename
+}
+
+function handleProcessingComplete() {
+  if (kbStore.currentKbId) {
+    docStore.fetchByKb(kbStore.currentKbId)
+  }
+}
+
+// Listen for doc-uploaded event to refresh doc list
+function onDocUploaded() {
+  if (kbStore.currentKbId) docStore.fetchByKb(kbStore.currentKbId)
+}
+onMounted(() => window.addEventListener('doc-uploaded', onDocUploaded))
+onBeforeUnmount(() => window.removeEventListener('doc-uploaded', onDocUploaded))
 </script>
 
 <style scoped>
@@ -133,6 +253,12 @@ async function handleSend(question: string) {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+}
+.chat-input-wrapper {
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.06);
 }
 
 .domain-intro-embedded {
@@ -246,4 +372,77 @@ async function handleSend(question: string) {
   margin-top: 12px;
 }
 .welcome-hint { font-size: 11px; color: var(--text-muted); }
+.chat-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-shrink: 0;
+}
+.chat-search-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.chat-search-input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: border-color 0.2s;
+}
+.chat-search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+}
+.chat-search-input::placeholder {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.chat-search-clear {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.chat-search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.chat-search-count {
+  font-size: 11px;
+  color: var(--accent-light);
+  white-space: nowrap;
+  font-weight: 600;
+}
+.chat-search-count.no-match {
+  color: var(--warning);
+}
+.chat-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.chat-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 </style>

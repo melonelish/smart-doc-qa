@@ -161,10 +161,11 @@ export const useConversationStore = defineStore('conversation', () => {
     }
   }
 
-  async function loadHistory() {
+  async function loadHistory(kbId?: string) {
     loadingHistory.value = true
     try {
-      history.value = await qaApi.listConversations()
+      const id = kbId || currentKbId.value || undefined
+      history.value = await qaApi.listConversations(id)
     } finally {
       loadingHistory.value = false
     }

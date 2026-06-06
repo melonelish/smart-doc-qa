@@ -1,5 +1,5 @@
 <template>
-  <n-space vertical :size="0" class="chat-messages" ref="scrollRef">
+  <div class="chat-messages" ref="scrollRef">
     <div v-if="!messages.length" class="chat-empty">
       <div class="empty-icon">💬</div>
       <h3>开始提问</h3>
@@ -9,30 +9,44 @@
       v-for="msg in messages"
       :key="msg.id"
       :message="msg"
+      :highlight="highlight"
     />
     <div ref="bottomRef"></div>
-  </n-space>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
-import { NSpace } from 'naive-ui'
 import type { Message } from '../../stores/conversation'
 import MessageItem from './MessageItem.vue'
 
 const props = defineProps<{
   messages: Message[]
   streaming: boolean
+  highlight?: string
 }>()
 
 const bottomRef = ref<HTMLElement | null>(null)
 
-// Auto-scroll on new messages
+// Auto-scroll on new messages (not when filtered/search)
 watch(
   () => props.messages.length,
+  async (newLen, oldLen) => {
+    if (newLen > oldLen) {
+      await nextTick()
+      bottomRef.value?.scrollIntoView({ behavior: 'smooth' })
+    }
+  },
+)
+
+// Also scroll when streaming content updates
+watch(
+  () => props.messages[props.messages.length - 1]?.content,
   async () => {
-    await nextTick()
-    bottomRef.value?.scrollIntoView({ behavior: 'smooth' })
+    if (props.streaming) {
+      await nextTick()
+      bottomRef.value?.scrollIntoView({ behavior: 'smooth' })
+    }
   },
 )
 </script>
@@ -41,7 +55,8 @@ watch(
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 16px 0;
+  min-height: 0;
 }
 .chat-empty {
   flex: 1;

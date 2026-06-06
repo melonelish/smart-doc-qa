@@ -113,7 +113,8 @@ async def ask_question(
 
         qa = QAService()
         if request.kb_id:
-            result = qa.ask_question_by_kb(
+            result = await asyncio.to_thread(
+                qa.ask_question_by_kb,
                 kb_id=request.kb_id,
                 question=request.question,
                 conversation_id=conv_id,
@@ -122,7 +123,8 @@ async def ask_question(
                 use_rerank=request.use_rerank,
             )
         else:
-            result = qa.ask_question(
+            result = await asyncio.to_thread(
+                qa.ask_question,
                 vector_store_name=request.document_id,
                 question=request.question,
                 conversation_id=conv_id,
@@ -157,7 +159,8 @@ async def ask_question_stream(request: QuestionRequest, db: Session = Depends(ge
 
         qa = QAService()
         if request.kb_id:
-            result = qa.ask_question_by_kb(
+            result = await asyncio.to_thread(
+                qa.ask_question_by_kb,
                 kb_id=request.kb_id,
                 question=request.question,
                 conversation_id=conv_id,
@@ -166,7 +169,8 @@ async def ask_question_stream(request: QuestionRequest, db: Session = Depends(ge
                 use_rerank=request.use_rerank,
             )
         else:
-            result = qa.ask_question(
+            result = await asyncio.to_thread(
+                qa.ask_question,
                 vector_store_name=request.document_id,
                 question=request.question,
                 conversation_id=conv_id,
@@ -295,17 +299,22 @@ async def get_document_history(
 @router.get("/history")
 async def list_conversations(
     limit: int = 20,
+    kb_id: str = "",
     db=Depends(get_db),
 ):
     from sqlalchemy import func
+    query = db.query(
+        ConversationRecord.conversation_id,
+        ConversationRecord.document_id,
+        func.min(ConversationRecord.created_at).label("started_at"),
+        func.max(ConversationRecord.created_at).label("last_activity_at"),
+        func.count(ConversationRecord.id).label("message_count"),
+    )
+    if kb_id:
+        # ConversationRecord.document_id 存的就是 kb_id（前端调用 /ask 时传的是 kb_id）
+        query = query.filter(ConversationRecord.document_id == kb_id)
     records = (
-        db.query(
-            ConversationRecord.conversation_id,
-            ConversationRecord.document_id,
-            func.min(ConversationRecord.created_at).label("started_at"),
-            func.max(ConversationRecord.created_at).label("last_activity_at"),
-            func.count(ConversationRecord.id).label("message_count"),
-        )
+        query
         .group_by(
             ConversationRecord.conversation_id,
             ConversationRecord.document_id,
