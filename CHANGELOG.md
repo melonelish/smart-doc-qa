@@ -7,25 +7,32 @@
 ## [Unreleased]
 
 ### Added
+### Fixed
+### Changed
+
+---
+
+## [2.7.0] - 2026-06-06
+
+### ✨ Added（新功能）
 - Agent tool call log display with timeline-style collapsible UI（Agent 工具调用日志展示，时间轴风格可折叠 UI）
 - Document selector moved to chat toolbar dropdown（文档选择器从左侧面板移至聊天工具栏下拉框）
+- ProcessingModal: 4-step upload progress window（ProcessingModal：4步上传进度弹窗）
 - Message copy button with visual feedback（消息复制按钮，带视觉反馈）
 - Chat message search and filter（聊天消息搜索过滤）
 - Automatic scroll to latest message（自动滚动到最新消息）
 - Duplicate document upload prevention（重复文档上传检测）
-- ProcessingModal: 4-step upload progress window（ProcessingModal：4步上传进度弹窗）
 - web_search tool switched from DuckDuckGo to Bing (cn.bing.com)（联网搜索从 DuckDuckGo 切换到 Bing 国内可用版本）
 
-### Fixed
+### 🐛 Fixed（Bug 修复）
 - Backend 502 errors caused by blocking sync calls in async event loop（后端 async 事件循环中同步阻塞调用导致的 502 错误）
   - Wrapped QAService calls in `asyncio.to_thread()` for all endpoints（所有端点使用 `asyncio.to_thread()` 隔离同步调用）
 - web_search timeout due to DuckDuckGo being inaccessible in China（联网搜索因 DuckDuckGo 被墙导致超时）
-- Frontend dev server port drift (5173 → 5172) when restarting multiple times（前端开发服务器端口漂移问题）
 - Chat history mixing across different knowledge bases（不同知识库的对话历史混在一起的问题）
 - User message bubble right-alignment issue（用户消息气泡靠右对齐问题）
 - Missing ProcessingModal after document selector refactor（文档选择器重构后缺失的 ProcessingModal）
 
-### Changed
+### ♻️ Changed（变更）
 - Tool call log UI: gradient header, step timeline, animated collapse（工具调用日志 UI 全面美化：渐变头部、步骤时间轴、弹性动画）
 - Message copy button always visible instead of hover-only（消息复制按钮改为始终可见）
 - User message bubble alignment with margin-left: auto（用户消息气泡对齐改为 margin-left: auto）
@@ -101,7 +108,8 @@
 
 ---
 
-[Unreleased]: https://github.com/melonelish/smart-doc-qa/compare/v2.6.0...HEAD
+[Unreleased]: https://github.com/melonelish/smart-doc-qa/compare/v2.7.0...HEAD
+[2.7.0]: https://github.com/melonelish/smart-doc-qa/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/melonelish/smart-doc-qa/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/melonelish/smart-doc-qa/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/melonelish/smart-doc-qa/releases/tag/v2.4.0

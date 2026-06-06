@@ -2,7 +2,7 @@
   <n-layout-header bordered class="top-bar">
     <div class="flex items-center gap-3">
       <span class="top-bar-title">{{ domainStore.currentDomain.icon }} {{ domainStore.currentDomain.name }}</span>
-      <n-tag size="small" type="success" :bordered="false">v2.5</n-tag>
+      <n-tag size="small" type="success" :bordered="false">v2.7</n-tag>
     </div>
     <div class="top-bar-right">
       <n-tag v-if="kbStore.currentKb?.name" size="small" type="info" :bordered="false">
