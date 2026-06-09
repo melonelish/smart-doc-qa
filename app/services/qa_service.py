@@ -54,8 +54,12 @@ if os.path.isfile(_env_path):
 
 from openai import OpenAI
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
+# ── NOTE: langchain_huggingface / sentence_transformers intentionally NOT imported ──
+# PyTorch C extensions crash on certain Windows / Python 3.13 setups.
+# We use APIEmbeddings (HTTP-based) instead of HuggingFaceEmbeddings.
+from app.services.embeddings_api import APIEmbeddings
+# ── langchain_text_splitters uses only NLTK/simple Python — safe ──
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import get_settings
@@ -147,22 +151,45 @@ def get_domain_prompt(domain: str) -> str:
 # ═══════════════════════════════════════════════════════════
 
 _llm_client: Optional[OpenAI] = None
+_llm_model: str = settings.openai_model
+
+# Active model config overrides (set by user via settings page)
+_active_model_base_url: str | None = None
+_active_model_api_key: str | None = None
+_active_model_name: str | None = None
 
 
-def get_llm_client() -> "OpenAI":
-    """Module-level singleton — create once, reuse across all requests."""
+def set_active_model_config(base_url: str, api_key: str, model_name: str) -> None:
+    """Override the global LLM config with a user's active model configuration."""
+    global _llm_client, _active_model_base_url, _active_model_api_key, _active_model_name, _llm_model
+    _llm_client = None  # Force re-creation
+    _active_model_base_url = base_url
+    _active_model_api_key = api_key
+    _active_model_name = model_name
+    _llm_model = model_name
+    print(f"[llm] Active model config updated → {base_url} model={model_name}")
+
+
+def get_llm_client(reset: bool = False) -> "OpenAI":
+    """Module-level singleton — create once, reuse across all requests.
+    
+    If set_active_model_config() was called, uses those values instead of settings.
+    """
     global _llm_client
-    if _llm_client is None:
-        if not settings.openai_api_key:
+    if _llm_client is None or reset:
+        api_key = _active_model_api_key or settings.openai_api_key
+        base_url = _active_model_base_url or settings.openai_base_url
+
+        if not api_key:
             from app.exceptions import ConfigurationError
             raise ConfigurationError(
-                "未配置 OPENAI_API_KEY，请在 .env 文件中设置后再使用问答功能。"
+                "未配置 API Key，请在「设置」页面添加模型配置或设置 .env 文件。"
                 "参考: https://platform.deepseek.com/"
             )
-        print(f"[llm] Creating OpenAI client → {settings.openai_base_url} model={settings.openai_model}")
+        print(f"[llm] Creating OpenAI client → {base_url}")
         _llm_client = OpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
+            api_key=api_key,
+            base_url=base_url,
             timeout=settings.openai_timeout,
             max_retries=1,
         )
@@ -173,28 +200,26 @@ def get_llm_client() -> "OpenAI":
 #  SINGLETON EMBEDDINGS
 # ═══════════════════════════════════════════════════════════
 
-_embeddings_instance: Optional[HuggingFaceEmbeddings] = None
+_embeddings_instance: Optional[APIEmbeddings] = None
 
 
-def get_embeddings() -> HuggingFaceEmbeddings:
-    """Lazy singleton — load once, reuse across all queries."""
+def get_embeddings() -> APIEmbeddings:
+    """Lazy singleton — load once, reuse across all queries.
+
+    Uses APIEmbeddings (HTTP-based) instead of HuggingFaceEmbeddings
+    to avoid PyTorch C-extension crashes on Windows.
+    """
     global _embeddings_instance
     if _embeddings_instance is None:
-        # Prevent network requests when model is already cached locally.
-        # On networks where huggingface.co is unreachable, the default
-        # behaviour hangs for minutes retrying adapter_config.json etc.
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
-        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-        print(f"[embed] Loading {settings.local_embedding_model} ... (first time)")
-        _embeddings_instance = HuggingFaceEmbeddings(
-            model_name=settings.local_embedding_model,
-            model_kwargs={"device": "cpu", "local_files_only": True},
-            encode_kwargs={
-                "normalize_embeddings": True,
-                "batch_size": 8,
-            },
+        api_key = _active_model_api_key or settings.openai_api_key
+        base_url = _active_model_base_url or settings.openai_base_url
+        print(f"[embed] Creating APIEmbeddings → {base_url}")
+        _embeddings_instance = APIEmbeddings(
+            api_key=api_key,
+            base_url=base_url,
+            model=settings.embedding_api_model or "text-embedding-v2",
         )
-        print("[embed] Model loaded OK")
+        print("[embed] APIEmbeddings ready")
     return _embeddings_instance
 
 
@@ -672,7 +697,7 @@ class QAService:
     def llm_chat(system: str, user: str) -> str:
         client = get_llm_client()
         resp = client.chat.completions.create(
-            model=settings.openai_model,
+            model=_llm_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -686,7 +711,7 @@ class QAService:
         """Yield text chunks for SSE streaming."""
         client = get_llm_client()
         stream = client.chat.completions.create(
-            model=settings.openai_model,
+            model=_llm_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -717,7 +742,7 @@ class QAService:
         client = get_llm_client()
         full_messages = [{"role": "system", "content": system}] + messages
         kwargs = dict(
-            model=settings.openai_model,
+            model=_llm_model,
             messages=full_messages,
             temperature=temperature,
             max_tokens=2000,
@@ -727,7 +752,7 @@ class QAService:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
 
-        print(f"[llm] calling {settings.openai_model} ...", flush=True)
+        print(f"[llm] calling {_llm_model} ...", flush=True)
         import time as _t
         _t0 = _t.time()
         resp = client.chat.completions.create(**kwargs)
@@ -1031,6 +1056,69 @@ class QAService:
 
     # ------- Knowledge Base Q&A ----------------------------------
 
+    def _detect_meta_question(self, question: str) -> str | None:
+        """Detect questions about the system itself.
+        Returns an answer string if it's a meta-question, None otherwise.
+        """
+        q = question.strip().lower()
+        print(f"[META DEBUG] Question: {q[:60]}")
+
+        model_patterns = [
+            "你是什么模型", "你用的什么模型", "你调用的是什么模型",
+            "你是什么大模型", "你用的是哪个模型", "你现在用的什么模型",
+            "你调用的是什么", "你现在用的是",
+            "你是谁开发的", "你是什么", "你叫什么",
+            "你从哪里来", "你是哪个公司的",
+            "chatgpt", "chat gpt", "gpt", "openai",
+            "小米", "mimo", "米莫", "deepseek",
+            "调用的是什么", "调用的是什么ai",
+            "what model", "which model", "who are you", "what are you",
+            "what is your model", "what ai model",
+        ]
+        for p in model_patterns:
+            if p in q:
+                model_name = _llm_model
+                base_url = _active_model_base_url or settings.openai_base_url
+                return (
+                    f"我目前使用的是 **{model_name}** 大语言模型，"
+                    f"API 服务地址为 {base_url}。\n\n"
+                    "你可以前往「设置 → 模型管理」页面查看或切换当前使用的模型配置。"
+                )
+
+        info_patterns = [
+            "这是什么系统", "这是什么", "这个系统是做什么的",
+            "这是什么软件", "你有什么功能", "你能做什么",
+        ]
+        for p in info_patterns:
+            if p in q:
+                return (
+                    "我是 **Smart Doc QA** 智能文档问答助手！\n\n"
+                    "我可以帮你：\n"
+                    "1. 📄 **文档问答**：上传 PDF、TXT、Markdown、Word、CSV 等文档，基于内容回答你的问题\n"
+                    "2. 🔍 **智能检索**：支持混合搜索（向量 + 关键词）+ 重排序，精准定位信息\n"
+                    "3. 📊 **表格分析**：自动识别文档中的表格数据，做趋势分析和数值查询\n"
+                    "4. 🌐 **联网搜索**：需要时可自动联网获取最新信息\n"
+                    "5. 🧰 **工具调用**：支持计算器、搜索等工具增强回答能力\n\n"
+                    "快去上传文档试试吧！"
+                )
+
+        config_patterns = [
+            "我的api", "我的密钥", "我的key", "我的api key",
+            "配置了什么模型", "现在用的是什么模型", "当前模型",
+        ]
+        for p in config_patterns:
+            if p in q:
+                model_name = _llm_model
+                base_url = settings.openai_base_url
+                return (
+                    f"当前系统配置：\n"
+                    f"- **模型**：{model_name}\n"
+                    f"- **API 地址**：{base_url}\n\n"
+                    f"如需自定义模型，请前往「设置」页面添加你自己的模型配置。"
+                )
+
+        return None
+
     def ask_question_by_kb(
         self,
         kb_id: str,
@@ -1057,6 +1145,29 @@ class QAService:
                 _db.close()
         except Exception:
             pass
+
+        # ── 0) Meta-question: system identity questions ──────────
+        meta_answer = self._detect_meta_question(question)
+        import logging; logging.getLogger("qa").info("META: q=%s matched=%s", question[:30], bool(meta_answer))
+        if meta_answer:
+            convo_id = conversation_id or str(uuid.uuid4())
+            conversation_memory.add_turn(
+                convo_id,
+                ConversationTurn(role="user", content=question),
+            )
+            conversation_memory.add_turn(
+                convo_id,
+                ConversationTurn(role="assistant", content=meta_answer),
+            )
+            return {
+                "answer": meta_answer,
+                "sources": [],
+                "source_details": [],
+                "source_count": 0,
+                "retrieve_method": "meta",
+                "conversation_id": convo_id,
+                "tool_log": None,
+            }  # <-- meta return, should be caught here
 
         # ── 1) Classify query & load tables (if any) ──────────────
         qtype = detect_query_type(question)

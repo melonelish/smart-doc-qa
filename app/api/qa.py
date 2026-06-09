@@ -1,3 +1,4 @@
+"""Q&A API routes — /ask and /ask-stream."""
 import asyncio
 import json
 import logging
@@ -19,6 +20,8 @@ from app.utils.conversation_store import conversation_store as conversation_memo
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/qa", tags=["qa"])
 
+
+# ── helpers ──────────────────────────────────────────────────────────
 
 def _save_turn(
     db: Session,
@@ -45,25 +48,16 @@ def _save_turn(
         logger.error("Failed to save conversation turn: %s", e)
 
 
+# ── request / response models ────────────────────────────────────
+
 class QuestionRequest(BaseModel):
     document_id: str = Field(default="", description="文档ID（与kb_id二选一）")
     kb_id: str = Field(default="", description="知识库ID（与document_id二选一）")
-    question: str = Field(
-        ..., min_length=1, max_length=2000, description="问题内容"
-    )
-    conversation_id: str = Field(
-        default="",
-        description="对话ID，为空则开启新对话，传入已有ID则继续多轮对话",
-    )
-    top_k: int = Field(4, ge=1, le=20, description="检索文档块数量")
-    use_hybrid: bool = Field(
-        default=True,
-        description="是否启用混合检索 (FAISS + BM25)",
-    )
-    use_rerank: bool = Field(
-        default=True,
-        description="是否启用 Cross-Encoder 重排序",
-    )
+    question: str = Field(..., min_length=1, max_length=2000, description="问题内容")
+    conversation_id: str = Field(default="", description="对话ID")
+    top_k: int = Field(4, ge=1, le=20)
+    use_hybrid: bool = Field(default=True)
+    use_rerank: bool = Field(default=False)  # 默认关闭 rerank（避免 PyTorch 崩溃）
 
     @model_validator(mode="after")
     def _check_target(self) -> "QuestionRequest":
@@ -100,99 +94,167 @@ class QuestionResponse(BaseModel):
     tool_log: list[ToolLogEntry] = []
 
 
+# ── /ask  (non-streaming) ─────────────────────────────────────
+
 @router.post("/ask", response_model=QuestionResponse)
 async def ask_question(
     request: QuestionRequest,
     db: Session = Depends(get_db),
 ):
-    try:
-        target_id = request.kb_id or request.document_id
-        conv_id = request.conversation_id or str(uuid.uuid4())
+    """Non-streaming Q&A — returns full JSON response.
 
-        _save_turn(db, target_id, conv_id, "user", request.question)
+    Meta-questions (about the model, system, etc.) are answered
+    directly without touching the vector store.
+    """
+    print(f"[ASK] ENTERED ask_question! q={request.question[:40]}")
+    target_id = request.kb_id or request.document_id
+    conv_id = request.conversation_id or str(uuid.uuid4())
 
-        qa = QAService()
-        if request.kb_id:
-            result = await asyncio.to_thread(
-                qa.ask_question_by_kb,
-                kb_id=request.kb_id,
-                question=request.question,
-                conversation_id=conv_id,
-                top_k=request.top_k,
-                use_hybrid=request.use_hybrid,
-                use_rerank=request.use_rerank,
-            )
-        else:
-            result = await asyncio.to_thread(
-                qa.ask_question,
-                vector_store_name=request.document_id,
-                question=request.question,
-                conversation_id=conv_id,
-                top_k=request.top_k,
-                use_hybrid=request.use_hybrid,
-                use_rerank=request.use_rerank,
-            )
+    _save_turn(db, target_id, conv_id, "user", request.question)
 
-        _save_turn(
-            db, target_id, result["conversation_id"],
-            "assistant", result["answer"],
-            sources=json.dumps(result.get("source_details", []), ensure_ascii=False),
-        )
-        return QuestionResponse(**result)
-    except ValueError as e:
-        raise VectorStoreNotFoundError(target_id)
-    except ConfigurationError:
-        raise  # let FastAPI handle the 400 directly
-    except RuntimeError as e:
-        raise QAError(str(e))
-    except Exception as e:
-        raise QAError(str(e))
+    qa = QAService()
+    logger.info("QA: kb=%s q=%s", target_id, request.question[:40])
 
+    # ── 1) Meta-question check (BEFORE any heavy work) ──
+    meta_answer = qa._detect_meta_question(request.question)
+    print(f"[ASK] meta_answer={str(meta_answer)[:60]}")
+    logger.info("ASK_META: matched=%s", bool(meta_answer))
 
-@router.post("/ask-stream")
-async def ask_question_stream(request: QuestionRequest, db: Session = Depends(get_db)):
-    try:
-        target_id = request.kb_id or request.document_id
-        conv_id = request.conversation_id or str(uuid.uuid4())
+    if meta_answer:
+        result = {
+            "answer": meta_answer,
+            "sources": [],
+            "source_details": [],
+            "source_count": 0,
+            "retrieval_method": "meta",
+            "conversation_id": conv_id,
+            "tool_log": [],  # ← 必须是 list，不能是 None
+        }
+    else:
+        # ── 2) Normal RAG pipeline (runs in thread to avoid blocking) ──
+        try:
+            if request.kb_id:
+                result = await asyncio.to_thread(
+                    qa.ask_question_by_kb,
+                    request.kb_id,
+                    request.question,
+                    conv_id,
+                    request.top_k,
+                    request.use_hybrid,
+                    request.use_rerank,
+                )
+            else:
+                result = await asyncio.to_thread(
+                    qa.ask_question,
+                    request.document_id,
+                    request.question,
+                    conv_id,
+                    request.top_k,
+                    request.use_hybrid,
+                    request.use_rerank,
+                )
+        except ValueError as e:
+            raise VectorStoreNotFoundError(target_id)
+        except ConfigurationError:
+            raise
+        except RuntimeError as e:
+            raise QAError(str(e))
+        except Exception as e:
+            logger.exception("Unexpected error in Q&A pipeline")
+            raise QAError(str(e))
 
-        _save_turn(db, target_id, conv_id, "user", request.question)
-
-        qa = QAService()
-        if request.kb_id:
-            result = await asyncio.to_thread(
-                qa.ask_question_by_kb,
-                kb_id=request.kb_id,
-                question=request.question,
-                conversation_id=conv_id,
-                top_k=request.top_k,
-                use_hybrid=request.use_hybrid,
-                use_rerank=request.use_rerank,
-            )
-        else:
-            result = await asyncio.to_thread(
-                qa.ask_question,
-                vector_store_name=request.document_id,
-                question=request.question,
-                conversation_id=conv_id,
-                top_k=request.top_k,
-                use_hybrid=request.use_hybrid,
-                use_rerank=request.use_rerank,
-            )
-    except (ValueError, VectorStoreNotFoundError) as e:
-        raise VectorStoreNotFoundError(request.kb_id or request.document_id)
-    except ConfigurationError:
-        raise
-    except RuntimeError as e:
-        raise QAError(str(e))
-    except Exception as e:
-        raise QAError(str(e))
-
+    # ── 3) Persist conversation turn ──
+    result["question"] = request.question
     _save_turn(
         db, target_id, result["conversation_id"],
         "assistant", result["answer"],
         sources=json.dumps(result.get("source_details", []), ensure_ascii=False),
     )
 
+    # ── 4) Validate and return ──
+    try:
+        resp = QuestionResponse(**result)
+    except Exception as _validation_err:
+        logger.exception("QuestionResponse validation failed")
+        raise
+    return resp
+
+
+# ── /ask-stream (SSE streaming) ──────────────────────────────
+
+@router.post("/ask-stream")
+async def ask_question_stream(request: QuestionRequest, db: Session = Depends(get_db)):
+    """Streaming Q&A — returns SSE stream.
+
+    Meta-questions are answered directly (no RAG pipeline).
+    """
+    print(f"[STREAM] ENTERED ask_question_stream! q={request.question[:40]}")
+    target_id = request.kb_id or request.document_id
+    conv_id = request.conversation_id or str(uuid.uuid4())
+
+    _save_turn(db, target_id, conv_id, "user", request.question)
+
+    qa = QAService()
+    logger.info("QA: kb=%s q=%s", target_id, request.question[:40])
+
+    # ── 1) Meta-question check ──
+    meta_answer = qa._detect_meta_question(request.question)
+    print(f"[STREAM] meta_answer={str(meta_answer)[:60]}")
+    logger.info("STREAM_META: matched=%s", bool(meta_answer))
+
+    result = None
+    if meta_answer:
+        result = {
+            "answer": meta_answer,
+            "sources": [],
+            "source_details": [],
+            "source_count": 0,
+            "retrieval_method": "meta",
+            "conversation_id": conv_id,
+            "tool_log": [],  # ← 必须是 list，不能是 None
+        }
+    else:
+        # ── 2) Normal RAG pipeline ──
+        try:
+            if request.kb_id:
+                result = await asyncio.to_thread(
+                    qa.ask_question_by_kb,
+                    request.kb_id,
+                    request.question,
+                    conv_id,
+                    request.top_k,
+                    request.use_hybrid,
+                    request.use_rerank,
+                )
+            else:
+                result = await asyncio.to_thread(
+                    qa.ask_question,
+                    request.document_id,
+                    request.question,
+                    conv_id,
+                    request.top_k,
+                    request.use_hybrid,
+                    request.use_rerank,
+                )
+        except ValueError as e:
+            raise VectorStoreNotFoundError(target_id)
+        except ConfigurationError:
+            raise
+        except RuntimeError as e:
+            raise QAError(str(e))
+        except Exception as e:
+            logger.exception("Unexpected error in streaming Q&A")
+            raise QAError(str(e))
+
+    # ── 3) Persist ──
+    result["question"] = request.question
+    _save_turn(
+        db, target_id, result["conversation_id"],
+        "assistant", result["answer"],
+        sources=json.dumps(result.get("source_details", []), ensure_ascii=False),
+    )
+
+    # ── 4) SSE stream ──
     async def sse_generator():
         conv_id = result.get("conversation_id", "")
         sources = result.get("sources", [])
@@ -201,29 +263,16 @@ async def ask_question_stream(request: QuestionRequest, db: Session = Depends(ge
         source_count = result.get("source_count", 0)
         tool_log = result.get("tool_log", [])
 
-        # 1) Meta event
-        meta = {
-            "type": "meta",
-            "conversation_id": conv_id,
-            "sources": sources,
-            "source_details": source_details,
-            "retrieval_method": retrieval_method,
-            "source_count": source_count,
-            "tool_log": tool_log,
-        }
-        yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
+        # Meta event
+        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conv_id, 'sources': sources, 'source_details': source_details, 'retrieval_method': retrieval_method, 'source_count': source_count, 'tool_log': tool_log}, ensure_ascii=False)}\n\n"
 
-        # 2) Stream answer tokens (true streaming requires streaming from LLM;
-        #    here we fall back to chunk-by-char for non-streaming path)
+        # Stream answer tokens
         answer = result.get("answer", "")
-        # Try to get a streaming generator from the service
-        # (If the service supports streaming, use it; otherwise char-by-char)
         for char in answer:
-            token = {"type": "token", "text": char}
-            yield f"data: {json.dumps(token, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'text': char}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.005)
 
-        # 3) Done event
+        # Done event
         yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -236,6 +285,8 @@ async def ask_question_stream(request: QuestionRequest, db: Session = Depends(ge
         },
     )
 
+
+# ── history endpoints ───────────────────────────────────────────
 
 @router.get("/history/{doc_id}")
 async def get_document_history(
@@ -311,7 +362,6 @@ async def list_conversations(
         func.count(ConversationRecord.id).label("message_count"),
     )
     if kb_id:
-        # ConversationRecord.document_id 存的就是 kb_id（前端调用 /ask 时传的是 kb_id）
         query = query.filter(ConversationRecord.document_id == kb_id)
     records = (
         query
