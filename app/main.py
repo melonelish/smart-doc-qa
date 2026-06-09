@@ -1,3 +1,10 @@
+# ⚠️ MUST be first: fix Intel MKL / torch C-extension crash on Windows
+import os as _os
+_os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+_os.environ.setdefault("OMP_NUM_THREADS", "1")
+_os.environ.setdefault("MKL_THREADING_LAYER", "GNU")
+_os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
 import sys
 import uuid
 from pathlib import Path
@@ -17,6 +24,9 @@ from app.core.config import get_settings
 from app.db.database import engine, Base
 from app.exceptions import AppException
 from app.api import documents, qa, knowledge_bases
+from app.api import auth, model_configs  # noqa: auth modules
+from app.models import document  # noqa: ensure models are loaded
+from app.models import user, model_config  # noqa: auth models
 from app.services.progress_ws import progress_tracker
 from app.utils.log_util import setup_logging, get_logger, set_request_id, clear_request_id
 
@@ -117,6 +127,8 @@ def create_app() -> FastAPI:
     app.include_router(documents.router)
     app.include_router(qa.router)
     app.include_router(knowledge_bases.router)
+    app.include_router(auth.router)
+    app.include_router(model_configs.router)
 
     # ── Serve new Vue frontend build ──
     _VUE_DIST = _project_root / "frontend" / "dist"
@@ -217,6 +229,30 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+# ── Load active model config from database on startup ──
+@app.on_event("startup")
+async def _load_active_model_config():
+    """Read the user's active model config and apply it to the LLM client."""
+    try:
+        from app.db.database import SessionLocal
+        from app.models.model_config import ModelConfig
+        from app.services.qa_service import set_active_model_config
+        from app.api.model_configs import _decrypt
+        _db = SessionLocal()
+        try:
+            _active = _db.query(ModelConfig).filter(ModelConfig.is_active == True).first()
+            if _active:
+                _key = _decrypt(_active.api_key_encrypted)
+                set_active_model_config(_active.base_url, _key, _active.model_name)
+                print(f"[startup] Loaded active model config: {_active.model_name}")
+            else:
+                print("[startup] No active model config found in database")
+        finally:
+            _db.close()
+    except Exception as _e:
+        print(f"[startup] Failed to load active model config: {_e}")
+
 
 if __name__ == "__main__":
     create_database_if_not_exists()

@@ -45,7 +45,7 @@
 
     <!-- CTA -->
     <div class="domain-intro-footer">
-      <n-button type="primary" size="large" @click="ui.createKBModalOpen = true">
+      <n-button class="create-kb-btn" type="primary" size="large" @click="ui.createKBModalOpen = true">
         ＋ 创建知识库开始使用
       </n-button>
       <p class="welcome-hint mt-2">支持 PDF / TXT / Markdown / CSV / Word</p>
@@ -190,6 +190,15 @@ const domain = domainStore.currentDomain
   color: var(--text-muted);
 }
 .mt-2 { margin-top: 8px; }
+.create-kb-btn {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
+  color: #fff !important;
+  border: none !important;
+  font-weight: 500;
+}
+.create-kb-btn:hover {
+  background: linear-gradient(135deg, #818cf8 0%, #a78bfa 100%) !important;
+}
 .kb-active-banner {
   margin-top: 12px;
   padding: 8px 14px;

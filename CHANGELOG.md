@@ -6,9 +6,38 @@
 
 ## [Unreleased]
 
-### Added
-### Fixed
-### Changed
+### ✨ Added（新功能）
+### 🐛 Fixed（Bug 修复）
+- 后端 502 错误：元问题检测不生效（根本原因为旧进程占用 8000 端口，导致请求打到旧代码）
+- 后端启动时 PyTorch/sentence_transformers C 扩展崩溃（0xC0000005），创建 embeddings_api.py 用 HTTP API 替代本地模型
+- Pydantic 校验错误：/ask 和 /ask-stream 端点返回 `tool_log: None` 导致 400 错误，改为 `tool_log: []`
+- 前端暗色模式下登录页、设置页输入框文字看不清的问题
+- 前端缓存问题：用户看到旧版 UI（Vite 缓存 + 浏览器缓存）
+
+### ♻️ Changed（变更）
+- 默认关闭 rerank（use_rerank=False），避免 PyTorch 崩溃
+- 元问题检测模式扩展：支持中英文混合提问（"你调用的不是chat gpt吗？"等）
+-  embeddings 加载方式改为 APIEmbeddings（HTTP API 调用，不再依赖本地 PyTorch）
+
+---
+
+## [2.8.0] - 2026-06-08
+
+### ✨ Added（新功能）
+- JWT user authentication: register, login, token refresh（JWT 用户认证：注册、登录、令牌刷新）
+- Custom model config: add/manage AI providers and API keys in Settings（自定义模型配置：在设置页添加管理 AI 模型和 API Key）
+- Route guard: unauthenticated users redirected to login（路由守卫：未登录自动跳转登录页）
+- Preset providers: DeepSeek, OpenAI, 通义千问, 豆包, 小米 MiMo（预设 AI 提供商：DeepSeek、OpenAI、通义千问、豆包、小米 MiMo）
+- Test connection button to verify API key validity（测试连接按钮验证 API Key 有效性）
+
+### 🐛 Fixed（Bug 修复）
+- Login error showing [object Object] instead of actual message（登录错误消息显示 [object Object] 而非实际错误描述）
+- API error handling now properly parses all response formats（API 错误处理现在正确解析所有响应格式）
+
+### ♻️ Changed（变更）
+- All QA API endpoints now protected by JWT authentication（所有 QA API 接口添加 JWT 鉴权保护）
+- Frontend router updated with auth guard（前端路由添加鉴权守卫）
+- TopBar: added settings entry, username display, logout button（顶部栏新增设置入口、用户名显示、退出按钮）
 
 ---
 

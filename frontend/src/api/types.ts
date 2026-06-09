@@ -83,3 +83,22 @@ export interface ConversationSummary {
   first_question: string
   last_question: string
 }
+
+/* ── Model Config ── */
+export interface ModelConfigOut {
+  id: string
+  name: string
+  provider: string
+  base_url: string
+  api_key_masked: string
+  model_name: string
+  is_active: boolean
+  created_at: string
+}
+
+export interface PresetProvider {
+  key: string
+  label: string
+  base_url: string
+  model_name: string
+}

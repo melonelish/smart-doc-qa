@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     openai_model: str = "deepseek-v4-pro"
     openai_embedding_model: str = "local"
     local_embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    embedding_api_model: str = "text-embedding-v2"
     reranker_model: str = "BAAI/bge-reranker-base"
     openai_timeout: int = 60
     openai_proxy: str = ""
@@ -42,6 +43,12 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     log_dir: str = ""
+
+    # Auth
+    jwt_secret_key: str = "change-me-in-production-use-random-64-chars"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_hours: int = 24
+    encryption_key: str = "change-me-too-must-be-32-url-safe-base64-bytes"  # Fernet key
 
     @property
     def database_url(self) -> str:

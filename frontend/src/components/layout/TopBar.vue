@@ -16,19 +16,35 @@
       >
         {{ ui.theme === 'dark' ? '☀️' : '🌙' }}
       </n-button>
+      <n-button quaternary size="small" @click="$router.push('/settings')" title="设置">
+        ⚙️
+      </n-button>
+      <span class="user-name" v-if="auth.username">{{ auth.username }}</span>
+      <n-button quaternary size="small" @click="handleLogout" title="退出登录">
+        退出
+      </n-button>
     </div>
   </n-layout-header>
 </template>
 
 <script setup lang="ts">
 import { NLayoutHeader, NButton, NTag } from 'naive-ui'
+import { useRouter } from 'vue-router'
 import { useUiStore } from '../../stores/ui'
 import { useDomainStore } from '../../stores/domain'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBase'
+import { useAuthStore } from '../../stores/auth'
 
 const ui = useUiStore()
 const domainStore = useDomainStore()
 const kbStore = useKnowledgeBaseStore()
+const auth = useAuthStore()
+const router = useRouter()
+
+function handleLogout() {
+  auth.logout()
+  router.push('/login')
+}
 </script>
 
 <style scoped>
